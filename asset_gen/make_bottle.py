@@ -36,7 +36,7 @@ class BottleParams:
     shoulder_h: float = 10.0    # height of the rounded shoulder, mm
     neck_d: float = 20.0        # outer diameter of the neck (over the thread crests), mm
     neck_h: float = 16.0        # height of the neck, mm
-    wall: float = 0.4           # body/shoulder wall thickness, mm (thin PET)
+    wall: float = 0.3           # body/shoulder wall thickness, mm (thin PET)
     neck_wall: float = 1.2      # neck finish wall thickness, mm (measured at thread root)
     base_wall: float = 1.5      # bottom thickness, mm
     base_fillet: float = 2.5    # radius of the rounded edge at the base, mm
