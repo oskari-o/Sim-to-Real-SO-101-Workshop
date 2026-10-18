@@ -154,6 +154,8 @@ The bottle can optionally be filled, still in the same `Vials-Bottle` tasks. You
 | `BOTTLE_MAX_BEADS` | `600` | beads: cap on rigid bodies (the level drops if hit) |
 | `BOTTLE_PBD_SPACING_MM` | `2.5` | pbd: particle spacing; halving it means 8× the particles |
 | `BOTTLE_PBD_ISOSURFACE` | `0` | pbd: `1` renders a continuous liquid surface instead of particle spheres |
+| `BOTTLE_PBD_LOOK` | `blue` | pbd: `blue` = opaque blue, easy to see; `water` = clear, IOR 1.333 (realistic, but nearly invisible inside a clear bottle) |
+| `BOTTLE_PBD_DEBUG` | `0` | pbd: `1` prints particle count, height range, how far they moved and how many are inside the bottle, every 2 s (needs `--disable_fabric`) |
 
 In both modes, the fill gets the mass of water at that level (41 g at 0.4, versus the 12 g bottle). It's packed on a staggered lattice inside the hollow collider at the bottle's start pose, so it drops onto the mat together with the bottle.
 

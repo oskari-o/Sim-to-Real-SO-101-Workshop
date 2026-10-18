@@ -14,6 +14,8 @@
 #   BOTTLE_MAX_BEADS=600           beads: cap on the number of rigid bodies
 #   BOTTLE_PBD_SPACING_MM=2.5      pbd: particle spacing (smaller = more particles, slower)
 #   BOTTLE_PBD_ISOSURFACE=0|1      pbd: render a liquid surface instead of particle spheres
+#   BOTTLE_PBD_LOOK=blue|water     pbd: opaque blue (default, easy to see) or clear water
+#   BOTTLE_PBD_DEBUG=0|1           pbd: print particle positions every 2 s (needs --disable_fabric)
 # Both fills need the hollow collider (make_bottle.py --collider hollow, the default).
 import os
 
@@ -27,6 +29,7 @@ from isaaclab.utils import configclass
 from sim_to_real_so101 import assets
 from sim_to_real_so101.utils.bottle_fill import (
     make_bead_collection_cfg,
+    report_pbd_liquid,
     reset_beads,
     reset_pbd_liquid,
     spawn_pbd_liquid,
@@ -95,9 +98,18 @@ def apply_bottle_fill(env_cfg) -> None:
                 "fill": fraction,
                 "spacing": float(os.getenv("BOTTLE_PBD_SPACING_MM", "2.5")) * 1e-3,
                 "isosurface": os.getenv("BOTTLE_PBD_ISOSURFACE", "0") == "1",
+                "look": os.getenv("BOTTLE_PBD_LOOK", "blue").strip().lower(),
             },
         )
         env_cfg.events.reset_liquid = EventTerm(func=reset_pbd_liquid, mode="reset")
+        if os.getenv("BOTTLE_PBD_DEBUG", "0") == "1":
+            env_cfg.events.report_liquid = EventTerm(
+                func=report_pbd_liquid,
+                mode="interval",
+                interval_range_s=(2.0, 2.0),
+                is_global_time=True,
+                params={"bottle_cfg": SceneEntityCfg("bottle")},
+            )
     else:
         raise ValueError(f"BOTTLE_FILL must be none, beads or pbd, got {fill!r}")
 

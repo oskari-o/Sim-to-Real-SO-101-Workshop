@@ -106,7 +106,7 @@ def make_bead_collection_cfg(usd_path: str, bottle_pos, fill: float, bead_radius
     total_mass = liquid_volume(r, z, level) * WATER_DENSITY * mass_scale
     m = total_mass / len(local)
     print(f"[bottle_fill] beads: {len(local)} x r={bead_radius * 1e3:.1f} mm, "
-          f"level {level * 1e3:.0f} mm, total {total_mass * 1e3:.0f} g")
+          f"level {level * 1e3:.0f} mm, total {total_mass * 1e3:.0f} g", flush=True)
 
     spawn = sim_utils.SphereCfg(
         radius=bead_radius,
@@ -185,12 +185,16 @@ def _set_rel(prim, apis, name, rel_name, targets):
 
 
 def spawn_pbd_liquid(env, env_ids, usd_path: str, bottle_pos, fill: float, spacing: float,
-                     isosurface: bool = False, viscosity: float = 0.0091, cohesion: float = 0.01,
-                     surface_tension: float = 0.0074, friction: float = 0.1):
+                     isosurface: bool = False, look: str = "blue", viscosity: float = 0.0091,
+                     cohesion: float = 0.01, surface_tension: float = 0.0074, friction: float = 0.1):
     """Prestartup event: create a PBD particle system and one fluid particle set per env.
 
     Offsets follow the PhysX fluid convention: fluid rest offset = spacing / 2, and
     particle contact offset = fluid rest offset / 0.6.
+
+    look: "blue" = opaque blue (easy to see, good for checking the physics);
+          "water" = clear glass with IOR 1.333 (realistic, but nearly invisible inside a
+          clear bottle, especially as separate particles without the isosurface).
     """
     import omni.usd
     from pxr import Gf, PhysxSchema, Sdf, UsdGeom, UsdPhysics, UsdShade, Vt
@@ -240,6 +244,14 @@ def spawn_pbd_liquid(env, env_ids, usd_path: str, bottle_pos, fill: float, spaci
     sh.CreateOutput("out", Sdf.ValueTypeNames.Token)
     water.CreateSurfaceOutput("mdl").ConnectToSource(sh.ConnectableAPI(), "out")
 
+    blue = UsdShade.Material.Define(stage, "/World/Liquid/Blue")
+    bs = UsdShade.Shader.Define(stage, "/World/Liquid/Blue/PreviewSurface")
+    bs.CreateIdAttr("UsdPreviewSurface")
+    bs.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(0.05, 0.35, 0.95))
+    bs.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.25)
+    blue.CreateSurfaceOutput().ConnectToSource(bs.ConnectableAPI(), "surface")
+    liquid_mat = water if look == "water" else blue
+
     if isosurface:
         try:
             iso = _apply_api(sp, "PhysxParticleIsosurfaceAPI")
@@ -252,7 +264,7 @@ def spawn_pbd_liquid(env, env_ids, usd_path: str, bottle_pos, fill: float, spaci
                             ("GridFilteringPasses", S, ""), ("GridSmoothingRadius", F, fluid_rest * 2),
                             ("NumMeshSmoothingPasses", I, 4), ("NumMeshNormalSmoothingPasses", I, 4)]:
                 _set_attr(sp, iso, n, "physxIsosurface:" + n[0].lower() + n[1:], t, v)
-            UsdShade.MaterialBindingAPI.Apply(psys.GetPrim()).Bind(water)
+            UsdShade.MaterialBindingAPI.Apply(psys.GetPrim()).Bind(liquid_mat)
         except Exception as e:  # noqa: BLE001
             print(f"[bottle_fill] isosurface not available ({e}); rendering particles as spheres")
             isosurface = False
@@ -282,10 +294,11 @@ def spawn_pbd_liquid(env, env_ids, usd_path: str, bottle_pos, fill: float, spaci
         if isosurface:
             pts.CreateVisibilityAttr(UsdGeom.Tokens.invisible)  # the isosurface mesh is what renders
         else:
-            UsdShade.MaterialBindingAPI.Apply(pts.GetPrim()).Bind(water)
+            UsdShade.MaterialBindingAPI.Apply(pts.GetPrim()).Bind(liquid_mat)
         _PBD_SETS[path] = world
     print(f"[bottle_fill] PBD liquid: {len(local)} particles/env, spacing {spacing * 1e3:.1f} mm, "
-          f"level {level * 1e3:.0f} mm, {total_mass * 1e3:.0f} g, isosurface={'on' if isosurface else 'off'}")
+          f"level {level * 1e3:.0f} mm, {total_mass * 1e3:.0f} g, isosurface={'on' if isosurface else 'off'}, "
+          f"look={look}, prims under /World/Liquid", flush=True)
 
 
 def reset_pbd_liquid(env, env_ids):
@@ -300,3 +313,36 @@ def reset_pbd_liquid(env, env_ids):
             continue
         pts.GetPointsAttr().Set(Vt.Vec3fArray([Gf.Vec3f(*p) for p in world]))
         pts.GetVelocitiesAttr().Set(Vt.Vec3fArray([Gf.Vec3f(0, 0, 0)] * len(world)))
+
+
+def report_pbd_liquid(env, env_ids, bottle_cfg=None):
+    """Interval event (BOTTLE_PBD_DEBUG=1): print where the particles are.
+
+    Reads the particle positions PhysX writes back to USD, which only happens with
+    --disable_fabric. If the numbers never change, either Fabric is on or the particles
+    aren't being simulated.
+    """
+    import omni.usd
+    from pxr import UsdGeom
+
+    stage = omni.usd.get_context().get_stage()
+    bottle_xy = None
+    if bottle_cfg is not None:
+        try:
+            pos = env.scene[bottle_cfg.name].data.root_pos_w[0].detach().cpu().numpy()
+            bottle_xy = pos[:2]
+        except Exception:  # noqa: BLE001
+            pass
+    for path, start in _PBD_SETS.items():
+        pts = UsdGeom.Points(stage.GetPrimAtPath(path))
+        if not pts:
+            print(f"[bottle_fill] {path} missing from the stage", flush=True)
+            continue
+        p = np.array(pts.GetPointsAttr().Get(), dtype=float)
+        moved = float(np.max(np.linalg.norm(p - start, axis=1))) if len(p) == len(start) else float("nan")
+        msg = (f"[bottle_fill] {path}: n={len(p)} z min/mean/max = {p[:, 2].min() * 1e3:.0f}/"
+               f"{p[:, 2].mean() * 1e3:.0f}/{p[:, 2].max() * 1e3:.0f} mm, max moved {moved * 1e3:.1f} mm")
+        if bottle_xy is not None:
+            inside = np.mean(np.linalg.norm(p[:, :2] - bottle_xy, axis=1) < 0.0195)
+            msg += f", {inside * 100:.0f}% within the bottle footprint"
+        print(msg, flush=True)
