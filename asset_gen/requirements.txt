@@ -2,5 +2,5 @@
 usd-core>=25.5
 numpy
 trimesh   # optional: shell inertia + watertight check
-scipy     # optional: used by trimesh mass properties
+scipy     # hollow collider (convex pieces); also used by trimesh mass properties
 matplotlib  # optional: --preview PNG

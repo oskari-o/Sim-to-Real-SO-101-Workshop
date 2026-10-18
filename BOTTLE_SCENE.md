@@ -12,6 +12,7 @@ Server-side setup (container, streaming, tunnels) is in [REMOTE_HOST_SETUP.md](R
 | --- | --- |
 | `asset_gen/make_bottle.py` | Generates the bottle USD procedurally from measured dimensions. Runs anywhere with `usd-core`; no Isaac needed. |
 | `asset_gen/requirements.txt` | Python deps for the generator. |
+| `source/sim_to_real_so101/utils/bottle_fill.py` | Optional bead or PBD liquid fill for the bottle. |
 | `source/sim_to_real_so101/assets/usd/Bottle.usda` | The generated asset used by the tasks. |
 | `source/sim_to_real_so101/tasks/vials_bottle_env_cfg.py` | Scene, event and env configs for the new tasks. |
 | `source/sim_to_real_so101/tasks/__init__.py` | Two `gym.register` calls appended at the end. |
@@ -43,7 +44,9 @@ What's inside the USD (Z-up, metres, origin at the centre of the base):
 
 - `/Bottle`: the rigid body. `RigidBodyAPI` plus `MassAPI` with mass, centre of mass and the diagonal inertia of the actual thin shell, not of a solid cylinder.
 - `/Bottle/visuals`: the render mesh, hollow, with real wall thickness (0.3 mm body, 1.2 mm neck, 1.5 mm base) and three ring ridges approximating the thread. Bound to an OmniGlass MDL material (IOR 1.57 for PET) with a `UsdPreviewSurface` fallback, so it also shows up in macOS Quick Look and other viewers.
-- `/Bottle/collision`: invisible, low-poly, solid outer hull with no threads, `convexHull` approximation, and a physics material with static/dynamic friction 0.5/0.4. The render mesh does not collide.
+- `/Bottle/collision`: invisible colliders with no threads and a physics material with static/dynamic friction 0.5/0.4. The render mesh does not collide. The outside matches the bottle in both collider modes, so grasping behaves the same.
+  - `--collider hollow` (default): a compound of about 110 convex pieces (floor plus wall bands × 16 sectors), with an open interior so beads or liquid can sit inside. The walls are 2.5 mm thick (`--collider-wall`), thicker than the real 0.3 mm, so small objects can't tunnel through. The usable interior is about 88 ml instead of 115 ml. The interior profile is stored in the root prim's customData (`interior_r_m`, `interior_z_m`) for the fill code.
+  - `--collider hull`: a single solid convex hull. Cheaper, but nothing fits inside.
 
 ### Regenerating it
 
@@ -139,6 +142,55 @@ Add the course's dataset args to either teleop command:
 
 Datasets recorded with the sliders are in the same LeRobot format as leader-arm ones: actions in leader units and the same camera streams. Expect slider demos to be slower and less smooth than leader-arm demos, though, and that matters for policy quality.
 
+## Filling the bottle: beads or PBD liquid
+
+The bottle can optionally be filled, still in the same `Vials-Bottle` tasks. You choose the fill with environment variables at launch, and nothing changes when they're unset. The code is in `source/sim_to_real_so101/utils/bottle_fill.py`; the switch is `apply_bottle_fill()` in `vials_bottle_env_cfg.py`.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `BOTTLE_FILL` | `none` | `none`, `beads` or `pbd` |
+| `BOTTLE_FILL_FRACTION` | `0.4` | liquid level as a fraction of the inside height (floor to rim); 0.4 ≈ 48 mm ≈ 41 ml |
+| `BOTTLE_BEAD_RADIUS_MM` | `2.5` | beads: sphere radius |
+| `BOTTLE_MAX_BEADS` | `600` | beads: cap on rigid bodies (the level drops if hit) |
+| `BOTTLE_PBD_SPACING_MM` | `2.5` | pbd: particle spacing; halving it means 8× the particles |
+| `BOTTLE_PBD_ISOSURFACE` | `0` | pbd: `1` renders a continuous liquid surface instead of particle spheres |
+
+In both modes, the fill gets the mass of water at that level (41 g at 0.4, versus the 12 g bottle). It's packed on a staggered lattice inside the hollow collider at the bottle's start pose, so it drops onto the mat together with the bottle.
+
+Needs `Bottle.usda` generated with the hollow collider (the generator's default since this change). An old file fails with a message telling you to regenerate.
+
+### Beads
+
+About 180 small blue spheres at fill 0.4 (2.5 mm radius, ~0.23 g each, almost frictionless, no bounce), as an Isaac Lab `RigidObjectCollection` named `beads`. They're ordinary rigid bodies, so they work with everything, and a reset puts them back inside the bottle along with it. Use beads for shifting mass, tipping and rough pouring.
+
+```bash
+BOTTLE_FILL=beads BOTTLE_FILL_FRACTION=0.4 \
+/workspace/isaaclab/_isaac_sim/python.sh remote/preview_scene.py \
+  --task Lerobot-So101-Teleop-Vials-Bottle-DR --livestream 2 --enable_cameras --kit_args "$KIT" \
+  2>&1 | tee outputs/bottle_beads.log
+```
+
+The log prints `[bottle_fill] beads: N x r=2.5 mm, level .. mm, total .. g`. Startup takes a few seconds longer, since each bead is spawned as its own prim. The same variables work with the teleop command, so you can push or grasp the bottle with the sliders and watch the beads shift.
+
+### PBD liquid (experimental)
+
+A PhysX position-based-dynamics fluid: about 1,800 particles at fill 0.4 and 2.5 mm spacing, with water-like viscosity, cohesion and surface tension, rendered with an IOR 1.333 glass material. Isaac Lab has no asset class for particles, so a `prestartup` event creates the particle system and particle set on the USD stage before the sim starts. That requires `replicate_physics = False`, which the config sets automatically; teleop uses one env anyway.
+
+```bash
+BOTTLE_FILL=pbd BOTTLE_FILL_FRACTION=0.4 BOTTLE_PBD_ISOSURFACE=1 \
+/workspace/isaaclab/_isaac_sim/python.sh remote/preview_scene.py \
+  --task Lerobot-So101-Teleop-Vials-Bottle-DR --livestream 2 --enable_cameras --disable_fabric --kit_args "$KIT" \
+  2>&1 | tee outputs/bottle_pbd.log
+```
+
+Things to expect and check:
+
+- **Start without the isosurface** (`BOTTLE_PBD_ISOSURFACE=0`). Particles then render as small spheres, which makes leaks and jitter obvious. Switch the isosurface on once the physics looks right; it costs extra GPU time every frame.
+- **`--disable_fabric`** is recommended. Particles have known rough edges with Fabric on Isaac Sim 5.x, and the reset writes particle positions back through USD. If the liquid doesn't return to the bottle on reset, the reset path isn't reaching PhysX in your build; restart the run to refill. `lerobot_agent.py` takes `--disable_fabric` too.
+- **Leaks or particles at rest jittering** mean the spacing is too coarse relative to the 2.5 mm walls, or there are too few solver iterations. Try `BOTTLE_PBD_SPACING_MM=2.0`, or regenerate the bottle with `--collider-wall 3`.
+- **Performance.** Watch the stream's frame rate and `nvidia-smi`. A few thousand particles should be fine on an L40S. The isosurface and smaller spacing are what get expensive.
+- **The particle API is set up through `PhysxSchema` directly.** If a schema attribute name differs in your Isaac Sim build, the traceback points at `spawn_pbd_liquid` in `bottle_fill.py`; paste it and it's a quick fix.
+
 ## Iterating
 
 1. Change parameters, regenerate `Bottle.usda` on the Mac, check the PNG and Quick Look.
@@ -155,3 +207,4 @@ Datasets recorded with the sliders are in the same LeRobot format as leader-arm 
 - **Gripper fit.** The 39 mm body may be close to the SO-101 jaw's maximum opening; the 20 mm neck is the easy grasp.
 - **Placement** was chosen from scene coordinates. Adjust `pos` if the bottle blocks a camera's view of the vials.
 - **No task semantics yet.** The bottle isn't part of any observation, reward or success term. A bottle task would add those in a new env cfg, the same way the vials task does.
+- **The fill is a stand-in.** Beads get mass and sloshing roughly right but not surface tension. PBD looks like liquid but isn't calibrated to water's flow. Neither is needed for pick-and-place; use them where the liquid's motion actually matters, such as pouring or fast moves.

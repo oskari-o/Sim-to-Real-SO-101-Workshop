@@ -16,6 +16,7 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description="Preview a workshop task without teleop hardware.")
 parser.add_argument("--task", default="Lerobot-So101-Teleop-Vials-To-Rack-DR")
 parser.add_argument("--reset_every", type=float, default=15.0, help="seconds between resets, 0 = never")
+parser.add_argument("--disable_fabric", action="store_true", help="use USD I/O instead of Fabric")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 
@@ -38,7 +39,7 @@ if args.task not in gym.registry:
     so101 = [k for k in gym.registry if "So101" in k or "so101" in k.lower()]
     raise SystemExit(f"[preview] task {args.task!r} not registered. Registered SO-101 tasks: {so101}")
 
-env_cfg = parse_env_cfg(args.task, device=args.device, num_envs=1)
+env_cfg = parse_env_cfg(args.task, device=args.device, num_envs=1, use_fabric=not args.disable_fabric)
 env = gym.make(args.task, cfg=env_cfg)
 env.reset()
 base = env.unwrapped

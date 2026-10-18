@@ -7,10 +7,14 @@ The bottle is a solid of revolution generated from a 2D profile:
 Output USD (Z-up, metres, origin at the centre of the bottle's base):
   /Bottle                 Xform, defaultPrim, RigidBodyAPI + MassAPI (mass, COM, shell inertia)
   /Bottle/visuals         thin-walled render mesh (outer + inner wall), glass material
-  /Bottle/collision       invisible low-poly solid outer hull, convexHull collider, plastic friction
+  /Bottle/collision       invisible colliders with plastic friction. --collider hollow (default):
+                          compound of convex wall pieces with an open interior, so beads or PBD
+                          liquid can sit inside. --collider hull: one solid convex hull (cheaper).
   /Bottle/Looks/...       OmniGlass MDL (Isaac Sim) with UsdPreviewSurface fallback, physics material
 
-Needs only `pip install usd-core numpy` (trimesh optional, used for inertia + checks).
+Needs `pip install usd-core numpy`; scipy for the hollow collider, trimesh for inertia + checks.
+With --collider hollow the root prim's customData also carries the collider's interior profile
+(interior_r_m / interior_z_m), which the sim uses to place beads or liquid particles inside.
 Run anywhere (Mac, server, inside the container with /isaac-sim/python.sh).
 
   python3 make_bottle.py -o Bottle.usda
@@ -52,6 +56,10 @@ class BottleParams:
     frosting: float = 0.02      # 0 = perfectly clear
     segments: int = 96          # angular resolution of the render mesh
     collision_segments: int = 32
+    collider: str = "hollow"    # "hollow" (compound, open interior) or "hull" (single solid convex hull)
+    collider_wall: float = 2.5  # wall thickness of the hollow collider, mm (thicker than the real wall so
+                                # small beads / particles can't tunnel; the interior is that much smaller)
+    collider_sectors: int = 16  # angular pieces of the hollow collider
 
     @property
     def total_h(self) -> float:
@@ -205,6 +213,79 @@ def revolve(prof, segments, cap_top=False):
     return np.array(points), counts, idx, normals
 
 
+# ----------------------------------------------------------------------------- hollow collider
+
+
+def hollow_collider(p: BottleParams, band_deg: float = 15.0):
+    """Convex pieces (mm point arrays) forming a thick-walled open container, plus the
+    interior profile [(r, z)] from the floor up to the rim."""
+    t = p.collider_wall
+    outer = [(r, z) for r, z, _ in outer_profile(p, with_threads=False)]
+    # wall polyline starts where the outer profile reaches z = t (top of the floor piece)
+    i = next(k for k, (_, z) in enumerate(outer) if z >= t)
+    (r0, z0), (r1, z1) = outer[i - 1], outer[i]
+    pt_t = (r0 + (r1 - r0) * (t - z0) / (z1 - z0), t) if z1 > t else outer[i]
+    wall = [pt_t] + outer[i + (1 if z1 <= t else 0):]
+    wall = [q for k, q in enumerate(wall) if k == 0 or math.dist(q, wall[k - 1]) > 1e-6]
+
+    segs = []
+    for (a, b) in zip(wall[:-1], wall[1:]):
+        dr, dz = b[0] - a[0], b[1] - a[1]
+        L = math.hypot(dr, dz)
+        segs.append((dz / L, -dr / L))  # outward normal (profile runs upward, material on the left)
+    inner = []
+    for k, (r, z) in enumerate(wall):
+        ns = [segs[j] for j in (k - 1, k) if 0 <= j < len(segs)]
+        nr, nz = sum(n[0] for n in ns), sum(n[1] for n in ns)
+        L = math.hypot(nr, nz)
+        nr, nz = nr / L, nz / L
+        miter = min(1.0 / max(nr * ns[0][0] + nz * ns[0][1], 1e-3), 2.0)  # keep walls t thick at corners
+        inner.append((r - nr * t * miter, z - nz * t * miter))
+
+    # group consecutive segments into bands that turn less than band_deg
+    bands, start = [], 0
+    ang = [math.atan2(n[1], n[0]) for n in segs]
+    for k in range(1, len(segs) + 1):
+        if k == len(segs) or abs(math.degrees(ang[k] - ang[start])) > band_deg:
+            bands.append((start, k))  # point indices start..k
+            start = k
+    n = p.collider_sectors
+    th = np.linspace(0, 2 * math.pi, n + 1)
+    pieces = []
+    for a, b in bands:
+        ring = wall[a:b + 1] + inner[a:b + 1]
+        for j in range(n):
+            angs = (th[j], 0.5 * (th[j] + th[j + 1]), th[j + 1])
+            pieces.append(np.array([(r * math.cos(q), r * math.sin(q), z) for r, z in ring for q in angs]))
+    # floor: everything of the outer profile below z = t, revolved, capped at z = t
+    floor_prof = [q for q in outer if q[1] < t] + [pt_t]
+    angs = np.linspace(0, 2 * math.pi, 32, endpoint=False)
+    floor = [(r * math.cos(q), r * math.sin(q), z) for r, z in floor_prof for q in angs]
+    floor += [(0.0, 0.0, t)]
+    pieces.insert(0, np.array(floor))
+    interior = [(0.0, t)] + inner
+    return pieces, interior
+
+
+def _hull_mesh(points_mm):
+    from scipy.spatial import ConvexHull
+    pts = np.unique(np.round(points_mm, 6), axis=0)
+    h = ConvexHull(pts)
+    used = np.unique(h.simplices)
+    remap = {v: k for k, v in enumerate(used)}
+    tris = [[remap[v] for v in tri] for tri in h.simplices]
+    return pts[used], [3] * len(tris), [v for tri in tris for v in tri]
+
+
+def interior_volume_ml(interior) -> float:
+    """Volume of revolution under the interior profile (r, z) from floor to rim, in ml."""
+    rs, zs = np.array([q[0] for q in interior]), np.array([q[1] for q in interior])
+    order = np.argsort(zs, kind="stable")
+    rs, zs = rs[order], zs[order]
+    return float(np.trapezoid(math.pi * rs**2, zs) / 1000) if hasattr(np, "trapezoid") else \
+        float(np.trapz(math.pi * rs**2, zs) / 1000)
+
+
 # ----------------------------------------------------------------------------- USD
 
 
@@ -286,16 +367,39 @@ def build(p: BottleParams, out_path: str):
     _set_mesh(vis, vis_pts, vis_c, vis_i, vis_n)
     UsdShade.MaterialBindingAPI.Apply(vis.GetPrim()).Bind(glass)
 
-    # --- collision mesh (solid outer hull, no threads, low-res)
-    col_prof = outer_profile(p, with_threads=False)
-    col_pts, col_c, col_i, _ = revolve(col_prof, p.collision_segments, cap_top=True)
-    col = UsdGeom.Mesh.Define(stage, "/Bottle/collision")
-    _set_mesh(col, col_pts, col_c, col_i)
-    col.CreateVisibilityAttr(UsdGeom.Tokens.invisible)
-    UsdPhysics.CollisionAPI.Apply(col.GetPrim())
-    UsdPhysics.MeshCollisionAPI.Apply(col.GetPrim()).CreateApproximationAttr(UsdPhysics.Tokens.convexHull)
-    UsdShade.MaterialBindingAPI.Apply(col.GetPrim()).Bind(
-        phys_mat, UsdShade.Tokens.weakerThanDescendants, "physics")
+    # --- colliders (no threads; invisible)
+    def add_collider(path, pts_mm, counts, idx):
+        m = UsdGeom.Mesh.Define(stage, path)
+        _set_mesh(m, pts_mm, counts, idx)
+        m.CreateVisibilityAttr(UsdGeom.Tokens.invisible)
+        UsdPhysics.CollisionAPI.Apply(m.GetPrim())
+        UsdPhysics.MeshCollisionAPI.Apply(m.GetPrim()).CreateApproximationAttr(UsdPhysics.Tokens.convexHull)
+        UsdShade.MaterialBindingAPI.Apply(m.GetPrim()).Bind(
+            phys_mat, UsdShade.Tokens.weakerThanDescendants, "physics")
+        return len(counts)
+
+    info = {}
+    if p.collider == "hull":  # one solid convex hull of the outside
+        col_pts, col_c, col_i, _ = revolve(outer_profile(p, with_threads=False), p.collision_segments,
+                                           cap_top=True)
+        col_faces = add_collider("/Bottle/collision", col_pts, col_c, col_i)
+        info["collider"] = "solid convex hull"
+    elif p.collider == "hollow":  # compound of convex wall pieces, open interior
+        pieces, interior = hollow_collider(p)
+        grp = UsdGeom.Xform.Define(stage, "/Bottle/collision")
+        grp.CreateVisibilityAttr(UsdGeom.Tokens.invisible)
+        col_faces = 0
+        for k, pc in enumerate(pieces):
+            col_faces += add_collider(f"/Bottle/collision/piece_{k:03d}", *_hull_mesh(pc))
+        rm = Vt.FloatArray([q[0] * MM for q in interior])
+        zm = Vt.FloatArray([q[1] * MM for q in interior])
+        root.GetPrim().SetCustomDataByKey("interior_r_m", rm)
+        root.GetPrim().SetCustomDataByKey("interior_z_m", zm)
+        root.GetPrim().SetCustomDataByKey("collider_wall_m", float(p.collider_wall * MM))
+        info["collider"] = f"hollow, {len(pieces)} convex pieces, wall {p.collider_wall} mm"
+        info["collider_interior_ml"] = interior_volume_ml(interior)
+    else:
+        raise ValueError(f"unknown collider {p.collider!r}")
 
     # --- rigid body + mass
     UsdPhysics.RigidBodyAPI.Apply(root.GetPrim())
@@ -303,7 +407,7 @@ def build(p: BottleParams, out_path: str):
     mass_kg = p.mass_g / 1000
     mass_api.CreateMassAttr(mass_kg)
     props = shell_mass_properties(vis_pts, vis_c, vis_i, mass_kg)
-    info = {"mass_kg": mass_kg}
+    info["mass_kg"] = mass_kg
     if props:
         com, inertia, tm = props
         mass_api.CreateCenterOfMassAttr(Gf.Vec3f(*com))
@@ -312,7 +416,7 @@ def build(p: BottleParams, out_path: str):
         info.update(com_m=com, inertia=inertia, watertight=tm.is_watertight,
                     shell_volume_ml=tm.volume * 1e6)
     stage.GetRootLayer().Save()
-    info.update(render_faces=len(vis_c), collision_faces=len(col_c),
+    info.update(render_faces=len(vis_c), collision_faces=col_faces,
                 capacity_ml=capacity_ml(p))
     return info
 
@@ -349,7 +453,12 @@ def preview(p: BottleParams, path: str):
     ax.fill([-r for r in rs], zs, color="#9cc9e6", ec="#1f5f8b", lw=0.8)
     cp = outer_profile(p, with_threads=False)
     cr, cz = [q[0] for q in cp], [q[1] for q in cp]
-    ax.plot(cr + [0], cz + [cz[-1]], "--", color="#d9534f", lw=1, label="collision hull")
+    if p.collider == "hollow":
+        _, interior = hollow_collider(p)
+        ax.plot(cr, cz, "--", color="#d9534f", lw=1, label=f"collider (hollow, {p.collider_wall} mm wall)")
+        ax.plot([q[0] for q in interior], [q[1] for q in interior], "--", color="#d9534f", lw=1)
+    else:
+        ax.plot(cr + [0], cz + [cz[-1]], "--", color="#d9534f", lw=1, label="collision hull")
     ax.axvline(0, color="#888", lw=0.5, ls=":")
     R = p.body_d / 2
     for z, lbl in [(p.body_h, f"body {p.body_h:g}"), (p.body_h + p.shoulder_h, f"+shoulder {p.shoulder_h:g}"),
@@ -393,6 +502,8 @@ def main():
             ap.add_argument(flag, dest=name, action=argparse.BooleanOptionalAction, default=val)
         elif name == "shoulder":
             ap.add_argument(flag, dest=name, choices=["sphere", "ellipse"], default=val)
+        elif name == "collider":
+            ap.add_argument(flag, dest=name, choices=["hollow", "hull"], default=val)
         else:
             ap.add_argument(flag, dest=name, type=type(val), default=val)
     ap.add_argument("-o", "--out", default="Bottle.usda")
