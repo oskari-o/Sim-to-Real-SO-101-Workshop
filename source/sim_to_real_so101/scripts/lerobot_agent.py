@@ -63,6 +63,22 @@ parser.add_argument(
 )
 parser.add_argument("--task_name", type=str, default=None, help="Name of the task.")
 parser.add_argument("--seed", type=int, default=101, help="Environment seed")
+parser.add_argument(
+    "--teleop_device",
+    choices=["leader", "virtual"],
+    default=os.getenv("TELEOP_DEVICE", "leader"),
+    help="'leader' = physical SO-101 leader on --port; "
+    "'virtual' = joint sliders from remote/joint_teleop_app.py over TCP.",
+)
+parser.add_argument(
+    "--virtual_host", type=str, default="127.0.0.1", help="Host of the joint teleop app."
+)
+parser.add_argument(
+    "--virtual_port",
+    type=int,
+    default=int(os.getenv("VIRTUAL_TELEOP_PORT", "54322")),
+    help="TCP port of the joint teleop app (forwarded with ssh -R).",
+)
 
 
 # append AppLauncher cli args
@@ -91,6 +107,7 @@ import sim_to_real_so101.tasks  # noqa: F401
 from sim_to_real_so101.utils.keyboard import KeyboardControl
 from sim_to_real_so101.utils.lerobot_interface import LeRobotSO101Interface
 from sim_to_real_so101.utils.lerobot_recorder import LeRobotRecorder
+from sim_to_real_so101.utils.virtual_leader import VirtualLeader
 
 
 def main():
@@ -115,7 +132,7 @@ def main():
     print(f"[INFO]: Click 'S' to start/stop recording; 'R' will also stop recording")
 
     # reset environment
-    env.reset()
+    obs, _ = env.reset()
 
     # cameras
     cameras = {}
@@ -138,8 +155,19 @@ def main():
         fps=30,
         kind="leader",
     )
-    robot_iface.init_device()
-    robot_iface.connect()
+    if args_cli.teleop_device == "virtual":
+        # No hardware: targets come from the joint teleop app. Start from the sim's reset pose.
+        home = robot_iface.get_raw_actions_from_radians(obs["policy"]["joint_pos_obs"][0])
+        home = dict(zip(robot_iface.SO101_JOINT_ORDER, home.tolist()))
+        robot_iface.robot = VirtualLeader(
+            home, host=args_cli.virtual_host, port=args_cli.virtual_port
+        )
+        print(f"[INFO]: Using virtual leader (joint teleop app on {args_cli.virtual_host}:{args_cli.virtual_port})")
+    else:
+        robot_iface.init_device()
+        robot_iface.connect()
+    virtual = isinstance(robot_iface.robot, VirtualLeader)
+    was_recording = False
 
     # Allocate action tensor
     actions = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
@@ -182,9 +210,28 @@ def main():
 
             obs, _, _, _, _ = env.step(actions)
 
+            if virtual:
+                # Buttons in the teleop app mirror the R / S / C keys
+                for cmd in robot_iface.robot.pop_commands():
+                    if cmd == "reset":
+                        keyboard_control.reset_world = True
+                        keyboard_control.stop_recording()
+                    elif cmd == "record":
+                        if keyboard_control.recording:
+                            keyboard_control.stop_recording()
+                        else:
+                            keyboard_control.start_recording()
+                    elif cmd == "cancel":
+                        keyboard_control.cancel_recording()
+                if keyboard_control.recording != was_recording:
+                    was_recording = keyboard_control.recording
+                    robot_iface.robot.send_status(was_recording)
+
             if keyboard_control.reset_world:
                 keyboard_control.reset_world = False
                 env.reset()
+                if virtual:
+                    robot_iface.robot.sync()  # sliders jump back to the start pose
                 continue
 
             if recording_mode and keyboard_control.recording:
