@@ -172,6 +172,16 @@ BOTTLE_FILL=beads BOTTLE_FILL_FRACTION=0.4 \
 
 The log prints `[bottle_fill] beads: N x r=2.5 mm, level .. mm, total .. g`. Startup takes a few seconds longer, since each bead is spawned as its own prim. The same variables work with the teleop command, so you can push or grasp the bottle with the sliders and watch the beads shift.
 
+Or teleoperate:
+
+````bash
+BOTTLE_FILL=beads BOTTLE_FILL_FRACTION=0.4 TELEOP_DEVICE=virtual PYTHONUNBUFFERED=1 \
+/workspace/isaaclab/_isaac_sim/python.sh source/sim_to_real_so101/scripts/lerobot_agent.py \
+  --task Lerobot-So101-Teleop-Vials-Bottle-DR --teleop_device virtual \
+  --livestream 2 --kit_args "$KIT" \
+  2>&1 | tee outputs/teleop_beads.log
+```
+
 ### PBD liquid (experimental)
 
 A PhysX position-based-dynamics fluid: about 1,800 particles at fill 0.4 and 2.5 mm spacing, with water-like viscosity, cohesion and surface tension, rendered with an IOR 1.333 glass material. Isaac Lab has no asset class for particles, so a `prestartup` event creates the particle system and particle set on the USD stage before the sim starts. That requires `replicate_physics = False`, which the config sets automatically; teleop uses one env anyway.
