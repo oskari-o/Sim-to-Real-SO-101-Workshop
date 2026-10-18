@@ -95,3 +95,23 @@ gym.register(
     },
 )
 
+
+
+# Vials-to-rack + transparent bottle prop (see vials_bottle_env_cfg.py)
+gym.register(
+    id="Lerobot-So101-Teleop-Vials-Bottle",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.vials_bottle_env_cfg:VialsBottleEnvCfg",
+    },
+)
+
+gym.register(
+    id="Lerobot-So101-Teleop-Vials-Bottle-DR",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.vials_bottle_env_cfg:VialsBottleDREnvCfg",
+    },
+)
