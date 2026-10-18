@@ -1,0 +1,6 @@
+# Bottle asset generator (asset_gen/make_bottle.py). Tested with usd-core 26.8, trimesh 5.1, Python 3.12.
+usd-core>=25.5
+numpy
+trimesh   # optional: shell inertia + watertight check
+scipy     # optional: used by trimesh mass properties
+matplotlib  # optional: --preview PNG

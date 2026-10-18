@@ -1,6 +1,8 @@
 # Running the SO-101 Sim-to-Real course on a remote GPU host
 
-This fork runs the course's simulation and GPU work on a rented cloud GPU (tested on UpCloud, Helsinki, 1x L40S) while you work from a Mac. Isaac Sim runs headless in Docker on the server and is streamed to the Mac with WebRTC. The SO-101 arms stay plugged into the Mac, and the leader arm can be forwarded to the server over SSH.
+This fork runs the course's simulation and GPU work on a rented cloud GPU (tested on UpCloud, Helsinki, 1x L40S) while you work from a Mac. Isaac Sim runs headless in Docker on the server and is streamed to the Mac with WebRTC. The SO-101 arms stay plugged into the Mac, and the leader arm can be forwarded to the server over SSH. Without the leader arm, a browser-based joint-slider app on the Mac can drive the sim instead (step 10b).
+
+The fork also adds a transparent bottle prop and `Vials-Bottle` tasks; see [BOTTLE_SCENE.md](BOTTLE_SCENE.md).
 
 Helper files in [`remote/`](remote/):
 
@@ -9,6 +11,7 @@ Helper files in [`remote/`](remote/):
 | `run_teleop.sh` | server | Starts `teleop-docker` without X11, with all driver capabilities |
 | `preview_scene.py` | server, in container | Loads a course task with no arm connected, resets periodically |
 | `serial_bridge.py` | Mac | Exposes the leader arm's serial port over TCP |
+| `joint_teleop_app.py` | Mac | Joint-slider teleop UI in the browser, used with `lerobot_agent.py --teleop_device virtual` |
 
 Placeholders used below: `<SERVER_IP>` is the server's public IPv4, `<HOME_IP>` is your own public IPv4 (`curl -4 ifconfig.me` on the Mac).
 
@@ -46,7 +49,10 @@ Host upcloud_gpu
   IdentityFile ~/.ssh/upcloud_so101
   UseKeychain yes
   AddKeysToAgent yes
+  ForwardAgent yes
 ```
+
+`ForwardAgent yes` lets the server use the Mac's GitHub SSH key, so you can clone and push the fork over SSH without keeping a key on the server. To edit on the server from the Mac, VS Code's Remote-SSH extension can connect to the `upcloud_gpu` host directly.
 
 UpCloud's templates put the key on `root`, not `ubuntu`. The first connection asks to confirm the host key; type `yes` in full.
 
@@ -125,8 +131,11 @@ Do not `apt install nvidia-utils-*` or `libnvidia-*-595` from suggestions; they 
 ## 6. Code, FFmpeg fix, containers
 
 ```bash
-git clone <your fork URL> ~/Sim-to-Real-SO-101-Workshop
+git config --global user.name "<your name>"
+git config --global user.email "<your email>"
+git clone git@github.com:<you>/Sim-to-Real-SO-101-Workshop.git ~/Sim-to-Real-SO-101-Workshop
 cd ~/Sim-to-Real-SO-101-Workshop
+git remote add upstream <NVIDIA's original repo URL>   # to pull course updates later
 git lfs install && git lfs pull
 chmod +x remote/run_teleop.sh
 ```
@@ -181,7 +190,7 @@ The `groups: cannot find name for group ID ...` line at container start is harml
 
 ## 9. Preview the course scene without the arm
 
-`lerobot_agent` always connects to the leader arm and fails without it. `remote/preview_scene.py` loads the same task, holds the robot still and resets every 15 s to show the domain randomization. Inside the container, from `/workspace/Sim-to-Real-SO-101-Workshop`:
+`lerobot_agent` connects to the leader arm by default and fails without it (`ConnectionError` on the serial port). To drive the sim without the arm, use the joint sliders in step 10b. To just look at a scene, `remote/preview_scene.py` loads the same task, holds the robot still and resets every 15 s to show the domain randomization. Inside the container, from `/workspace/Sim-to-Real-SO-101-Workshop`:
 
 ```bash
 /workspace/isaaclab/_isaac_sim/python.sh remote/preview_scene.py \
@@ -190,7 +199,7 @@ The `groups: cannot find name for group ID ...` line at container start is harml
   2>&1 | tee outputs/preview.log
 ```
 
-`--enable_cameras` is required because the task has cameras. Options: `--task Lerobot-So101-Teleop-Vials-To-Rack` (no DR), `--reset_every 0`.
+`--enable_cameras` is required because the task has cameras. Options: `--task Lerobot-So101-Teleop-Vials-To-Rack` (no DR), `--task Lerobot-So101-Teleop-Vials-Bottle-DR` (with the bottle, see [BOTTLE_SCENE.md](BOTTLE_SCENE.md)), `--reset_every 0`.
 
 Viewport navigation in the client (click the viewport first; Option = Alt): Alt + left-drag orbit, middle-drag pan, scroll zoom, right-click + WASD/QE fly, select a prim in the Stage panel and press F to frame it. Navigate in the Perspective camera, not in `gripper_cam` or `Camera_OmniVision_9782_Color`, or you move those cameras.
 
@@ -239,12 +248,43 @@ lerobot_agent --task Lerobot-So101-Teleop-Vials-To-Rack-DR --livestream 2 \
 
 Recording works the same way with the course's `--repo_id`, `--repo_root` and `--task_name` arguments added. `socat` is gone after a container restart; redo that step.
 
+## 10b. Teleop without a leader arm: joint sliders
+
+`remote/joint_teleop_app.py` serves a page with one slider per joint, hold-to-move keys and record/reset buttons. On the server, `lerobot_agent.py --teleop_device virtual` replaces the leader arm with `utils/virtual_leader.py`. It returns the same values a leader arm reports, so the mapping and LeRobot recording are unchanged.
+
+**Mac, terminal 1:** the app (standard library only, no venv needed)
+
+```bash
+python3 remote/joint_teleop_app.py      # then open http://127.0.0.1:8765
+```
+
+**Mac, terminal 2:** reverse tunnel for the app's port
+
+```bash
+ssh -N -R 54322:localhost:54322 upcloud_gpu
+```
+
+**Server, container shell:**
+
+```bash
+TELEOP_DEVICE=virtual PYTHONUNBUFFERED=1 \
+/workspace/isaaclab/_isaac_sim/python.sh source/sim_to_real_so101/scripts/lerobot_agent.py \
+  --task Lerobot-So101-Teleop-Vials-To-Rack-DR --teleop_device virtual --livestream 2 \
+  --kit_args "--/exts/omni.kit.livestream.app/primaryStream/publicIp=<SERVER_IP> --/exts/omni.kit.livestream.app/primaryStream/signalPort=49100 --/exts/omni.kit.livestream.app/primaryStream/streamPort=47998" \
+  2>&1 | tee outputs/virtual_teleop.log
+```
+
+The log prints `[VirtualLeader] connected`, and the page's status pill turns green. Keys: Q/A shoulder pan, W/S lift, E/D elbow, R/F wrist flex, T/G wrist roll, Y/H gripper, Shift for fine moves, Space to start/stop recording. The page's Record / Cancel / Reset buttons do the same as the agent's S / C / R keys, so they work even if keyboard input doesn't pass through the stream. Add `--repo_id`, `--repo_root` and `--task_name` to record.
+
+Running the script file with `python.sh` instead of the `lerobot_agent` entry point guarantees the checked-out code runs. Order doesn't matter much: the agent keeps waiting for the app, and reconnects if it drops.
+
 ## 11. Logs and housekeeping
 
 - Isaac Sim (Kit) logs: host `~/docker/isaac-sim/logs/Kit/<app>/5.1/kit_*.log`, container `/root/.nvidia-omniverse/logs/Kit/`.
 - Isaac Lab logs go to `/tmp/isaaclab/logs` in the container and are lost with it. Pipe runs through `tee outputs/<name>.log` instead; `outputs/` is mounted from the host.
 - Copy a log tail to the Mac clipboard: `ssh upcloud_gpu 'tail -n 80 ~/Sim-to-Real-SO-101-Workshop/outputs/agent_run.log' | pbcopy`
-- Hung Isaac Sim after Ctrl-C: from another tmux window, `docker exec teleop pkill -9 -f kit`, or `docker kill teleop`.
+- Hung Isaac Sim after Ctrl-C or a crash: from another tmux window on the host, `docker exec teleop pkill -9 -f kit`, or `docker kill teleop` (the container uses `--rm`, so restart it with `remote/run_teleop.sh`). Then check that `nvidia-smi` no longer shows a `kit`/`python` process holding GPU memory.
+- Code under `source/` and `remote/` is mounted into the container, so `git pull` on the host is enough; no image rebuild for code or asset changes.
 - After a driver change, clear stale shader caches inside the container: `rm -rf /root/.cache/ov/shaders /root/.cache/nvidia/GLCache/*`.
 - Done for the day: shut the server down in the Hub. Done with the course: delete the server **and** its storage volume.
 
@@ -260,3 +300,8 @@ Recording works the same way with the course's `--repo_id`, `--repo_root` and `-
 | `A camera was spawned without the --enable_cameras flag` | Add `--enable_cameras` |
 | `Could not connect on port '/dev/ttyACM1'` | Leader arm not bridged (step 10), or use `preview_scene.py` |
 | Black screen in client | App not fully loaded yet, wrong `publicIp`, or UDP blocked |
+| `[VirtualLeader] waiting for teleop app on 127.0.0.1:54322` repeating | `joint_teleop_app.py` not running on the Mac, or the `ssh -R 54322` tunnel isn't up (step 10b) |
+| Teleop page says "waiting for sim" | Agent not started with `--teleop_device virtual`, or tunnel down |
+| Bottle renders black or grey | Translucency off; use the `Vials-Bottle` tasks, which enable it ([BOTTLE_SCENE.md](BOTTLE_SCENE.md)) |
+| `Encountered 1 file that should have been a pointer` | An LFS-tracked file was committed as a normal blob; `git add --renormalize <file>` and commit |
+| USD or texture loads fail, file is ~130 bytes | LFS pointer stub; run `git lfs pull` |
