@@ -149,6 +149,41 @@ def reset_beads(env, env_ids, asset_cfg):
 _PBD_SETS: dict[str, np.ndarray] = {}  # particle set prim path -> initial world positions
 
 
+def _apply_api(prim, *names):
+    """Apply whichever of the named PhysxSchema API classes exist; return the applied ones."""
+    from pxr import PhysxSchema
+
+    out = []
+    for n in names:
+        cls = getattr(PhysxSchema, n, None)
+        if cls is not None:
+            out.append(cls.Apply(prim))
+    return out
+
+
+def _set_attr(prim, apis, name, attr_name, sdf_type, value):
+    """Set an attribute via the first schema object with Create<name>Attr, else by raw attribute name.
+
+    PhysX schema attributes move between API classes across Isaac Sim versions; writing the
+    raw attribute (e.g. physxParticle:selfCollision) is equivalent and doesn't depend on that.
+    """
+    for api in apis:
+        fn = getattr(api, f"Create{name}Attr", None)
+        if fn is not None:
+            return fn(value)
+    attr = prim.CreateAttribute(attr_name, sdf_type)
+    attr.Set(value)
+    return attr
+
+
+def _set_rel(prim, apis, name, rel_name, targets):
+    for api in apis:
+        fn = getattr(api, f"Create{name}Rel", None)
+        if fn is not None:
+            return fn().SetTargets(targets)
+    return prim.CreateRelationship(rel_name).SetTargets(targets)
+
+
 def spawn_pbd_liquid(env, env_ids, usd_path: str, bottle_pos, fill: float, spacing: float,
                      isosurface: bool = False, viscosity: float = 0.0091, cohesion: float = 0.01,
                      surface_tension: float = 0.0074, friction: float = 0.1):
@@ -172,23 +207,25 @@ def spawn_pbd_liquid(env, env_ids, usd_path: str, bottle_pos, fill: float, spaci
     psys_path = "/World/Liquid/ParticleSystem"
     UsdGeom.Xform.Define(stage, "/World/Liquid")
     psys = PhysxSchema.PhysxParticleSystem.Define(stage, psys_path)
-    psys.CreateSimulationOwnerRel().SetTargets([Sdf.Path(scene_path)])
-    psys.CreateContactOffsetAttr(contact)
-    psys.CreateRestOffsetAttr(solid_rest)
-    psys.CreateParticleContactOffsetAttr(particle_contact)
-    psys.CreateSolidRestOffsetAttr(solid_rest)
-    psys.CreateFluidRestOffsetAttr(fluid_rest)
-    psys.CreateSolverPositionIterationCountAttr(16)
-    psys.CreateMaxVelocityAttr(2.0)
+    sp, F, I, B = psys.GetPrim(), Sdf.ValueTypeNames.Float, Sdf.ValueTypeNames.Int, Sdf.ValueTypeNames.Bool
+    _set_rel(sp, [psys], "SimulationOwner", "simulationOwner", [Sdf.Path(scene_path)])
+    _set_attr(sp, [psys], "ContactOffset", "contactOffset", F, contact)
+    _set_attr(sp, [psys], "RestOffset", "restOffset", F, solid_rest)
+    _set_attr(sp, [psys], "ParticleContactOffset", "particleContactOffset", F, particle_contact)
+    _set_attr(sp, [psys], "SolidRestOffset", "solidRestOffset", F, solid_rest)
+    _set_attr(sp, [psys], "FluidRestOffset", "fluidRestOffset", F, fluid_rest)
+    _set_attr(sp, [psys], "SolverPositionIterationCount", "solverPositionIterationCount", I, 16)
+    _set_attr(sp, [psys], "MaxVelocity", "maxVelocity", F, 2.0)
 
     # fluid behaviour
     pbd = UsdShade.Material.Define(stage, "/World/Liquid/PBDMaterial")
-    pm = PhysxSchema.PhysxPBDMaterialAPI.Apply(pbd.GetPrim())
-    pm.CreateViscosityAttr(viscosity)
-    pm.CreateCohesionAttr(cohesion)
-    pm.CreateSurfaceTensionAttr(surface_tension)
-    pm.CreateFrictionAttr(friction)
-    pm.CreateDensityAttr(WATER_DENSITY)
+    mp = pbd.GetPrim()
+    pm = _apply_api(mp, "PhysxPBDMaterialAPI")
+    _set_attr(mp, pm, "Viscosity", "physxPBDMaterial:viscosity", F, viscosity)
+    _set_attr(mp, pm, "Cohesion", "physxPBDMaterial:cohesion", F, cohesion)
+    _set_attr(mp, pm, "SurfaceTension", "physxPBDMaterial:surfaceTension", F, surface_tension)
+    _set_attr(mp, pm, "Friction", "physxPBDMaterial:friction", F, friction)
+    _set_attr(mp, pm, "Density", "physxPBDMaterial:density", F, WATER_DENSITY)
     UsdShade.MaterialBindingAPI.Apply(psys.GetPrim()).Bind(
         pbd, UsdShade.Tokens.weakerThanDescendants, "physics")
 
@@ -205,17 +242,16 @@ def spawn_pbd_liquid(env, env_ids, usd_path: str, bottle_pos, fill: float, spaci
 
     if isosurface:
         try:
-            iso = PhysxSchema.PhysxParticleIsosurfaceAPI.Apply(psys.GetPrim())
-            iso.CreateIsosurfaceEnabledAttr(True)
-            iso.CreateMaxVerticesAttr(1024 * 1024)
-            iso.CreateMaxTrianglesAttr(2 * 1024 * 1024)
-            iso.CreateMaxSubgridsAttr(1024 * 4)
-            iso.CreateGridSpacingAttr(fluid_rest * 1.5)
-            iso.CreateSurfaceDistanceAttr(fluid_rest * 1.6)
-            iso.CreateGridFilteringPassesAttr("")
-            iso.CreateGridSmoothingRadiusAttr(fluid_rest * 2)
-            iso.CreateNumMeshSmoothingPassesAttr(4)
-            iso.CreateNumMeshNormalSmoothingPassesAttr(4)
+            iso = _apply_api(sp, "PhysxParticleIsosurfaceAPI")
+            if not iso:
+                raise RuntimeError("PhysxParticleIsosurfaceAPI not in this PhysxSchema")
+            S = Sdf.ValueTypeNames.String
+            for n, t, v in [("IsosurfaceEnabled", B, True), ("MaxVertices", I, 1024 * 1024),
+                            ("MaxTriangles", I, 2 * 1024 * 1024), ("MaxSubgrids", I, 1024 * 4),
+                            ("GridSpacing", F, fluid_rest * 1.5), ("SurfaceDistance", F, fluid_rest * 1.6),
+                            ("GridFilteringPasses", S, ""), ("GridSmoothingRadius", F, fluid_rest * 2),
+                            ("NumMeshSmoothingPasses", I, 4), ("NumMeshNormalSmoothingPasses", I, 4)]:
+                _set_attr(sp, iso, n, "physxIsosurface:" + n[0].lower() + n[1:], t, v)
             UsdShade.MaterialBindingAPI.Apply(psys.GetPrim()).Bind(water)
         except Exception as e:  # noqa: BLE001
             print(f"[bottle_fill] isosurface not available ({e}); rendering particles as spheres")
@@ -234,11 +270,14 @@ def spawn_pbd_liquid(env, env_ids, usd_path: str, bottle_pos, fill: float, spaci
         pts.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*p) for p in world]))
         pts.CreateVelocitiesAttr(Vt.Vec3fArray([Gf.Vec3f(0, 0, 0)] * len(world)))
         pts.CreateWidthsAttr(Vt.FloatArray([2 * fluid_rest] * len(world)))
-        ps = PhysxSchema.PhysxParticleSetAPI.Apply(pts.GetPrim())
-        ps.CreateSelfCollisionAttr(True)
-        ps.CreateFluidAttr(True)
-        ps.CreateParticleGroupAttr(0)
-        ps.CreateParticleSystemRel().SetTargets([Sdf.Path(psys_path)])
+        pp = pts.GetPrim()
+        # selfCollision / particleGroup / particleSystem belong to PhysxParticleAPI, fluid to
+        # PhysxParticleSetAPI; apply both and fall back to the raw physxParticle:* names
+        ps = _apply_api(pp, "PhysxParticleSetAPI", "PhysxParticleAPI")
+        _set_attr(pp, ps, "SelfCollision", "physxParticle:selfCollision", B, True)
+        _set_attr(pp, ps, "Fluid", "physxParticle:fluid", B, True)
+        _set_attr(pp, ps, "ParticleGroup", "physxParticle:particleGroup", I, 0)
+        _set_rel(pp, ps, "ParticleSystem", "physxParticle:particleSystem", [Sdf.Path(psys_path)])
         UsdPhysics.MassAPI.Apply(pts.GetPrim()).CreateMassAttr(total_mass)
         if isosurface:
             pts.CreateVisibilityAttr(UsdGeom.Tokens.invisible)  # the isosurface mesh is what renders
