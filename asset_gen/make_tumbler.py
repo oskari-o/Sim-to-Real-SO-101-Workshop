@@ -4,8 +4,10 @@
 Shape (all in mm, Z up, origin at the centre of the glass's underside):
   - straight cylindrical outside, thick solid base, inner wall tapering from
     --wall-base at the floor to --wall-top at the rim, fully rounded rim
-  - cut pattern on the outside: --flutes tall/short alternating V-cut spikes rising from an
-    arched band above the base, and V-notches around the bottom edge (--no-cuts for a plain glass)
+  - cut pattern on the outside (--no-cuts for a plain glass): --dents V-cut dents, each starting
+    as a triangular notch in the bottom edge (neighbours meet, so the base edge is a star, not a
+    ring), tapering in width and depth up to --hull-h in a curved, hull-like outline, then running
+    straight up as a narrow --groove-width groove that fades out just below the rim
 
 USD layout (same conventions as make_bottle.py):
   /Tumbler             Xform, defaultPrim, RigidBodyAPI + MassAPI (mass, COM, inertia from the mesh)
@@ -43,20 +45,22 @@ class TumblerParams:
     floor_fillet: float = 4.0    # inside floor-to-wall fillet radius, mm
     bottom_fillet: float = 1.0   # outside bottom edge fillet, mm
     cuts: bool = True            # model the cut-crystal pattern
-    flutes: int = 16             # number of spikes around (alternating tall / short)
-    flute_depth: float = 2.4     # max depth of a spike cut at its base, mm
-    tall_tip: float = 0.93       # tall spike tip height, fraction of height
-    short_tip: float = 0.70      # short spike tip height, fraction of height
-    flute_start: float = 24.0    # height where spikes start (arched band below), mm
-    notch_depth: float = 2.5     # V-notch depth at the bottom edge, mm
-    notch_h: float = 10.0        # V-notch height, mm
+    dents: int = 16              # number of V-cut dents around
+    notch_depth: float = 2.5     # dent depth at the bottom edge, mm
+    notch_width: float = 1.0     # dent width at the bottom edge, fraction of the spacing (1 = neighbours meet)
+    hull_h: float = 28.0         # height over which the dent narrows from the notch to the groove, mm
+    hull_power: float = 1.6      # shape of that taper: 1 = straight sides, >1 = curved (hull-like), <1 = bulging
+    groove_width: float = 2.0    # width of the straight groove above the hull part, mm
+    groove_depth: float = 0.8    # depth of the straight groove, mm
+    groove_fade: float = 10.0    # length over which the groove narrows and fades out at the top, mm
+    top_margin: float = 3.0      # groove ends this far below the top of the rim, mm
     density: float = 2.45        # g/cm^3 (lead-free crystal glass); mass = volume * density
     mass_g: float = 0.0          # >0 overrides the computed mass (weigh yours!)
     static_friction: float = 0.6
     dynamic_friction: float = 0.5
     restitution: float = 0.05
     ior: float = 1.52            # crystal glass
-    segments_per_flute: int = 20  # angular resolution (render mesh = flutes * this)
+    res_mm: float = 1.0          # angular resolution along the circumference, mm (4x finer around each groove)
     dz: float = 1.0              # vertical resolution of the outer wall, mm
     collider_sectors: int = 16
 
@@ -98,42 +102,51 @@ def profile(p: TumblerParams):
     return pts
 
 
+def dent_shape(p: TumblerParams, z: float) -> tuple[float, float]:
+    """(half-width in mm along the circumference, depth in mm) of one dent at height z."""
+    pitch_mm = 2 * math.pi * p.R / p.dents
+    hw0, hg = 0.5 * p.notch_width * pitch_mm, 0.5 * p.groove_width
+    z_end = p.height - p.top_margin
+    if z >= z_end:
+        return 0.0, 0.0
+    if z < p.hull_h:  # notch -> groove, curved taper
+        f = (1 - z / p.hull_h) ** p.hull_power
+        hw, depth = hg + (hw0 - hg) * f, p.groove_depth + (p.notch_depth - p.groove_depth) * f
+    else:
+        hw, depth = hg, p.groove_depth
+    fade = min(1.0, (z_end - z) / max(p.groove_fade, 1e-6))  # narrows to a point and vanishes
+    return hw * fade, depth * fade
+
+
 def cut_depth(p: TumblerParams, theta: np.ndarray, z: float) -> np.ndarray:
     """Radial depth of the cut pattern (mm) at angles theta and height z, on the outside wall."""
     if not p.cuts:
         return np.zeros_like(theta)
-    N, H = p.flutes, p.height
-    pitch = 2 * math.pi / N
-    d = np.zeros_like(theta)
-    # spikes: V-grooves, widest at flute_start, tapering to a point at the tip
-    for k in range(N):
-        tall = k % 2 == 0
-        tip = (p.tall_tip if tall else p.short_tip) * H
-        w0 = (0.55 if tall else 0.45) * pitch
-        z0 = p.flute_start
-        if z >= tip:
-            continue
-        if z >= z0:
-            t = (tip - z) / (tip - z0)
-            w, depth = w0 * t, p.flute_depth * t ** 0.6  # tapers to a point, depth to 0
-        else:  # rounded (arched) bottom end of the spike
-            u = (z0 - z) / 5.0
-            if u >= 1:
-                continue
-            w, depth = w0 * math.sqrt(1 - u * u), p.flute_depth * math.sqrt(1 - u * u)
-        dth = np.angle(np.exp(1j * (theta - k * pitch)))
-        d = np.maximum(d, depth * np.clip(1 - np.abs(dth) / max(w, 1e-6), 0, None))
-    # V-notches around the bottom edge, between the spikes
-    if z < p.notch_h:
-        depth = p.notch_depth * (1 - z / p.notch_h)
-        dth = np.angle(np.exp(1j * (theta - pitch / 2 - np.round((theta - pitch / 2) / pitch) * pitch)))
-        d = np.maximum(d, depth * np.clip(1 - np.abs(dth) / (0.5 * pitch), 0, None))
-    # never cut more than half the wall
-    if z > p.base_h:
+    pitch = 2 * math.pi / p.dents
+    hw, depth = dent_shape(p, z)
+    if hw <= 0 or depth <= 0:
+        return np.zeros_like(theta)
+    # arc distance (mm) from the nearest dent centre
+    ds = np.abs(theta - np.round(theta / pitch) * pitch) * p.R
+    d = depth * np.clip(1 - ds / hw, 0, None)
+    if z > p.base_h:  # never cut more than half the wall
         d = np.minimum(d, 0.5 * (p.R - float(p.r_in(z))))
-    if z > p.height - 4:
-        d *= 0.0
     return d
+
+
+def angles(p: TumblerParams) -> np.ndarray:
+    """Circumferential samples: --res-mm spacing, 4x finer within the groove, apex/edges included."""
+    pitch = 2 * math.pi / p.dents
+    pitch_mm = pitch * p.R
+    fine = max(p.res_mm / 4, 0.05)
+    near = 0.5 * p.groove_width * 1.5
+    s = np.concatenate([np.arange(-near, near + 1e-9, fine),
+                        np.arange(near, pitch_mm / 2, p.res_mm),
+                        -np.arange(near, pitch_mm / 2, p.res_mm), [pitch_mm / 2]])
+    s = np.unique(np.round(s, 6))
+    s = s[(s > -pitch_mm / 2 + 1e-6) & (s <= pitch_mm / 2 + 1e-9)]
+    th = (np.arange(p.dents)[:, None] * pitch + (s / p.R)[None, :]).ravel()
+    return np.sort(np.mod(th, 2 * math.pi))
 
 
 # ----------------------------------------------------------------------------- mesh
@@ -141,8 +154,8 @@ def cut_depth(p: TumblerParams, theta: np.ndarray, z: float) -> np.ndarray:
 
 def build_mesh(p: TumblerParams):
     prof = profile(p)
-    S = p.flutes * p.segments_per_flute
-    th = np.linspace(0, 2 * math.pi, S, endpoint=False)
+    th = angles(p)
+    S = len(th)
     c, s = np.cos(th), np.sin(th)
     points, rings = [], []
     for r, z, tag in prof:
@@ -320,13 +333,13 @@ def preview(p: TumblerParams, path: str):
     import matplotlib.pyplot as plt
     from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-    fig = plt.figure(figsize=(12, 6.2))
-    ax = fig.add_subplot(1, 2, 1)
+    fig = plt.figure(figsize=(16, 6.2))
+    ax = fig.add_subplot(1, 3, 1)
     prof = profile(p)
     rs = [q[0] for q in prof]
     zs = [q[1] for q in prof]
     ax.fill(rs, zs, color="#cfe3ef", ec="#1f5f8b", lw=0.8, label="section (between cuts)")
-    th = np.array([0.0])  # through the centre of a tall spike / notch-free angle
+    th = np.array([0.0])  # through the centre of a dent
     cut = [(q[0] - (cut_depth(p, th, q[1])[0] * q[0] / p.R if q[2] == "o" else 0), q[1]) for q in prof]
     ax.plot([-c[0] for c in cut], [c[1] for c in cut], color="#1f5f8b", lw=0.8)
     ax.fill([-c[0] for c in cut], [c[1] for c in cut], color="#cfe3ef")
@@ -338,14 +351,30 @@ def preview(p: TumblerParams, path: str):
         ax.axhline(z, color="#bbb", lw=0.5)
         ax.text(p.R + 2, z, lbl, va="center", fontsize=8)
     ax.set_title(f"Section: Ø{p.diameter:g} × {p.height:g} mm, wall {p.wall_base:g}→{p.wall_top:g} mm, "
-                 f"base {p.base_h:g} mm\nleft half through a spike cut; brim-full ≈ {capacity_ml(p):.0f} ml",
+                 f"base {p.base_h:g} mm\nleft half through a dent; brim-full ≈ {capacity_ml(p):.0f} ml",
                  fontsize=9)
     ax.set_aspect("equal")
     ax.set_xlim(-p.R - 4, p.R + 26)
     ax.legend(loc="upper right", fontsize=7)
 
-    ax3 = fig.add_subplot(1, 2, 2, projection="3d")
-    q = TumblerParams(**{**vars(p), "segments_per_flute": max(8, p.segments_per_flute // 2), "dz": 2.0})
+    # unrolled outside wall: cut depth over 3 dent spacings (outline of each dent)
+    axm = fig.add_subplot(1, 3, 2)
+    pitch_mm = 2 * math.pi * p.R / p.dents
+    smm = np.linspace(-1.5 * pitch_mm, 1.5 * pitch_mm, 600)
+    zz = np.linspace(0, p.height, 330)
+    depth = np.array([cut_depth(p, smm / p.R, z) for z in zz])
+    im = axm.pcolormesh(smm, zz, depth, cmap="Blues", shading="auto")
+    axm.contour(smm, zz, depth, levels=[0.05], colors="#1f5f8b", linewidths=0.8)
+    axm.axhline(p.hull_h, color="#d9534f", lw=0.6, ls="--")
+    axm.text(smm[-1], p.hull_h + 1, f"hull_h {p.hull_h:g}", ha="right", fontsize=7, color="#d9534f")
+    axm.set_aspect("equal")
+    axm.set_xlabel("around the circumference, mm")
+    axm.set_ylabel("height, mm")
+    axm.set_title("Outside unrolled: cut depth (3 dents)", fontsize=9)
+    fig.colorbar(im, ax=axm, fraction=0.046, pad=0.02, label="depth, mm")
+
+    ax3 = fig.add_subplot(1, 3, 3, projection="3d")
+    q = TumblerParams(**{**vars(p), "res_mm": max(p.res_mm, 1.5), "dz": 1.5})
     pts, counts, idx, tris, vn = build_mesh(q)
     outer = pts[tris].mean(axis=1)
     keep = np.hypot(outer[:, 0], outer[:, 1]) > q.R - 3.2  # outside surface only, for a clean picture
@@ -365,7 +394,8 @@ def preview(p: TumblerParams, path: str):
     ax3.set_box_aspect((1, 1, 1))
     ax3.view_init(elev=14, azim=-90)
     ax3.set_axis_off()
-    ax3.set_title(f"Outside ({q.flutes} spikes, alternating tall/short; notched base)"
+    ax3.set_title(f"Outside ({q.dents} dents: notch -> hull taper to {q.hull_h:g} mm -> "
+                  f"{q.groove_width:g} mm groove)"
                   if q.cuts else "Outside (no cuts)", fontsize=9)
     fig.tight_layout()
     fig.savefig(path, dpi=130)
