@@ -203,6 +203,25 @@ Things to expect and check:
 - **Performance.** Watch the stream's frame rate and `nvidia-smi`. A few thousand particles should be fine on an L40S. The isosurface and smaller spacing are what get expensive.
 - **The particle API is set up through `PhysxSchema` directly.** If a schema attribute name differs in your Isaac Sim build, the traceback points at `spawn_pbd_liquid` in `bottle_fill.py`; paste it and it's a quick fix.
 
+## Tumbler glass (asset only, not in a task yet)
+
+`asset_gen/make_tumbler.py` builds a cut-crystal tumbler modelled on the Riedel DSG Neat, with the same conventions as the bottle: Z-up, metres, origin at the centre of the underside, glass material, compound collider with an open interior, and the interior profile in customData so `utils/bottle_fill.py` can fill it. Defaults are the measured glass:
+
+| Part | Size |
+| --- | --- |
+| Height / outer diameter | 82 / 82 mm |
+| Solid base (inside floor height) | 13 mm |
+| Wall | 6 mm at the floor, tapering to 2 mm at the top, fully rounded rim |
+| Cut pattern | 16 V-cut spikes (alternating tall/short) rising from an arched band, 16 V-notches around the bottom edge (`--no-cuts` for a plain glass) |
+| Mass | ~314 g, from the mesh volume × 2.45 g/cm³ crystal (`--mass-g` to use a weighed value) |
+| Capacity | ~297 ml brim-full |
+
+```bash
+python asset_gen/make_tumbler.py -o source/sim_to_real_so101/assets/usd/Tumbler.usda --preview outputs/tumbler.png
+```
+
+Riedel's product page lists the Neat as 77 mm high × 70 mm wide, so measure again before relying on the defaults (`--height`, `--diameter`). The render mesh is ~38k faces (3.8 MB); `--segments-per-flute` and `--dz` trade detail for size. The collider ignores the cuts: a solid base disc plus 16 convex wall sectors following the inner taper.
+
 ## Iterating
 
 1. Change parameters, regenerate `Bottle.usda` on the Mac, check the PNG and Quick Look.
