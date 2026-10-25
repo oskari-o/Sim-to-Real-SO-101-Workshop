@@ -212,15 +212,15 @@ Things to expect and check:
 | Height / outer diameter | 82 / 82 mm |
 | Solid base (inside floor height) | 13 mm |
 | Wall | 6 mm at the floor, tapering to 2 mm at the top, fully rounded rim |
-| Cut pattern | 16 V-cut dents: a triangular notch in the bottom edge (neighbours meet, so the base edge is a star), narrowing in a curved hull-like outline up to 28 mm (`--hull-h`, `--hull-power`), then a straight 2 mm groove (`--groove-width`, `--groove-depth`) that narrows and fades out 3 mm below the rim. `--no-cuts` gives a plain glass |
-| Mass | ~325 g, from the mesh volume × 2.45 g/cm³ crystal (`--mass-g` to use a weighed value) |
+| Cut pattern | 15 V-cut dents: an 11 mm wide, 2.5 mm deep triangular notch in the bottom edge, narrowing up to 28 mm with nearly straight sides that then curve in (`--hull-h`, `--hull-a`, `--hull-b`), then a straight 2 mm groove (`--groove-width`, `--groove-depth`) that narrows and fades out 3 mm below the rim. `--no-cuts` gives a plain glass |
+| Mass | ~323 g, from the mesh volume × 2.45 g/cm³ crystal (`--mass-g` to use a weighed value) |
 | Capacity | ~297 ml brim-full |
 
 ```bash
 python asset_gen/make_tumbler.py -o source/sim_to_real_so101/assets/usd/Tumbler.usda --preview outputs/tumbler.png
 ```
 
-Riedel's product page lists the Neat as 77 mm high × 70 mm wide, so measure again before relying on the defaults (`--height`, `--diameter`). The render mesh is ~49k faces (4.9 MB); `--res-mm` (circumferential spacing, 4× finer around each groove) and `--dz` trade detail for size. The preview's middle panel shows the outside unrolled with the cut depth, which is the quickest way to judge the dent outline. The collider ignores the cuts: a solid base disc plus 16 convex wall sectors following the inner taper.
+Riedel's product page lists the Neat as 77 mm high × 70 mm wide, so measure again before relying on the defaults (`--height`, `--diameter`). The render mesh is ~48k faces (4.7 MB); `--res-mm` (circumferential spacing, 4× finer around each groove) and `--dz` trade detail for size. The preview's middle panel shows the outside unrolled with the cut depth, which is the quickest way to judge the dent outline. The collider ignores the cuts: a solid base disc plus 16 convex wall sectors following the inner taper.
 
 ## Iterating
 

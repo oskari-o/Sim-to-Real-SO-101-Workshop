@@ -5,9 +5,9 @@ Shape (all in mm, Z up, origin at the centre of the glass's underside):
   - straight cylindrical outside, thick solid base, inner wall tapering from
     --wall-base at the floor to --wall-top at the rim, fully rounded rim
   - cut pattern on the outside (--no-cuts for a plain glass): --dents V-cut dents, each starting
-    as a triangular notch in the bottom edge (neighbours meet, so the base edge is a star, not a
-    ring), tapering in width and depth up to --hull-h in a curved, hull-like outline, then running
-    straight up as a narrow --groove-width groove that fades out just below the rim
+    as a --notch-width wide triangular notch in the bottom edge, narrowing up to --hull-h (sides
+    nearly straight at first, then curving in, (1 - u^a)^b), then running straight up as a narrow
+    --groove-width groove that fades out just below the rim
 
 USD layout (same conventions as make_bottle.py):
   /Tumbler             Xform, defaultPrim, RigidBodyAPI + MassAPI (mass, COM, inertia from the mesh)
@@ -45,11 +45,12 @@ class TumblerParams:
     floor_fillet: float = 4.0    # inside floor-to-wall fillet radius, mm
     bottom_fillet: float = 1.0   # outside bottom edge fillet, mm
     cuts: bool = True            # model the cut-crystal pattern
-    dents: int = 16              # number of V-cut dents around
+    dents: int = 15              # number of V-cut dents around
     notch_depth: float = 2.5     # dent depth at the bottom edge, mm
-    notch_width: float = 1.0     # dent width at the bottom edge, fraction of the spacing (1 = neighbours meet)
+    notch_width: float = 11.0    # dent width at the bottom edge, mm
     hull_h: float = 28.0         # height over which the dent narrows from the notch to the groove, mm
-    hull_power: float = 1.6      # shape of that taper: 1 = straight sides, >1 = curved (hull-like), <1 = bulging
+    hull_a: float = 2.4          # taper shape (1 - u^a)^b, u = z / hull_h: larger a keeps the sides
+    hull_b: float = 1.2          #   straighter for longer before curving in; b > 1 eases into the groove
     groove_width: float = 2.0    # width of the straight groove above the hull part, mm
     groove_depth: float = 0.8    # depth of the straight groove, mm
     groove_fade: float = 10.0    # length over which the groove narrows and fades out at the top, mm
@@ -105,12 +106,12 @@ def profile(p: TumblerParams):
 def dent_shape(p: TumblerParams, z: float) -> tuple[float, float]:
     """(half-width in mm along the circumference, depth in mm) of one dent at height z."""
     pitch_mm = 2 * math.pi * p.R / p.dents
-    hw0, hg = 0.5 * p.notch_width * pitch_mm, 0.5 * p.groove_width
+    hw0, hg = 0.5 * min(p.notch_width, pitch_mm), 0.5 * p.groove_width
     z_end = p.height - p.top_margin
     if z >= z_end:
         return 0.0, 0.0
     if z < p.hull_h:  # notch -> groove, curved taper
-        f = (1 - z / p.hull_h) ** p.hull_power
+        f = (1 - (z / p.hull_h) ** p.hull_a) ** p.hull_b  # gentle straight-ish taper, then curves in
         hw, depth = hg + (hw0 - hg) * f, p.groove_depth + (p.notch_depth - p.groove_depth) * f
     else:
         hw, depth = hg, p.groove_depth
