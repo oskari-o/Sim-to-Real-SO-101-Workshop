@@ -68,16 +68,20 @@ RESET_BOTTLE = EventTerm(
 )
 
 
-def apply_bottle_fill(env_cfg) -> None:
-    """Add beads or PBD liquid inside the bottle according to the BOTTLE_* environment variables."""
+def apply_bottle_fill(env_cfg, usd_path: str = BOTTLE_USD, pos=BOTTLE_POS) -> None:
+    """Add beads or PBD liquid inside a container according to the BOTTLE_* environment variables.
+
+    usd_path / pos: the container's asset (needs the interior profile in its customData, as
+    Bottle.usda and Tumbler.usda have) and its spawn position. Defaults: the bottle in this scene.
+    """
     fill = os.getenv("BOTTLE_FILL", "none").strip().lower()
     if fill in ("", "none", "0"):
         return
     fraction = float(os.getenv("BOTTLE_FILL_FRACTION", "0.4"))
     if fill == "beads":
         env_cfg.scene.beads = make_bead_collection_cfg(
-            BOTTLE_USD,
-            BOTTLE_POS,
+            usd_path,
+            pos,
             fill=fraction,
             bead_radius=float(os.getenv("BOTTLE_BEAD_RADIUS_MM", "2.5")) * 1e-3,
             max_beads=int(os.getenv("BOTTLE_MAX_BEADS", "600")),
@@ -93,8 +97,8 @@ def apply_bottle_fill(env_cfg) -> None:
             func=spawn_pbd_liquid,
             mode="prestartup",
             params={
-                "usd_path": BOTTLE_USD,
-                "bottle_pos": BOTTLE_POS,
+                "usd_path": usd_path,
+                "bottle_pos": pos,
                 "fill": fraction,
                 "spacing": float(os.getenv("BOTTLE_PBD_SPACING_MM", "2.5")) * 1e-3,
                 "isosurface": os.getenv("BOTTLE_PBD_ISOSURFACE", "0") == "1",

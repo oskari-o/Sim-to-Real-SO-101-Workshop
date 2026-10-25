@@ -115,3 +115,23 @@ gym.register(
         "env_cfg_entry_point": f"{__name__}.vials_bottle_env_cfg:VialsBottleDREnvCfg",
     },
 )
+
+
+# Mat + bottle + tumbler only (see glassware_env_cfg.py)
+gym.register(
+    id="Lerobot-So101-Teleop-Glassware",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.glassware_env_cfg:GlasswareEnvCfg",
+    },
+)
+
+gym.register(
+    id="Lerobot-So101-Teleop-Glassware-DR",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.glassware_env_cfg:GlasswareDREnvCfg",
+    },
+)

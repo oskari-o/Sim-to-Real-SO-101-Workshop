@@ -223,6 +223,39 @@ python asset_gen/make_tumbler.py -o source/sim_to_real_so101/assets/usd/Tumbler.
 
 Riedel's product page lists the Neat as 77 mm high × 70 mm wide, so measure again before relying on the defaults (`--height`, `--diameter`). The render mesh is ~62k faces (6.5 MB); `--res-mm` (circumferential spacing, 4× finer around each groove) and `--dz` trade detail for size. The preview shows the section, the outside unrolled with the cut depth (the quickest way to judge the dent outline), the outside, and the underside seen from below. The collider ignores the cuts: a solid base disc plus 16 convex wall sectors following the inner taper.
 
+## Glassware task: mat, bottle and tumbler only
+
+`Lerobot-So101-Teleop-Glassware` (and `-DR`) is the course's base task scene (robot, lightbox with its light and D455 camera, wrist camera, mat) with only the bottle and the tumbler on the mat. There are no vials, no rack and no success terms. It's defined in `source/sim_to_real_so101/tasks/glassware_env_cfg.py`, and the other tasks are untouched.
+
+| Prop | Start position (x, y, z), m | Reset |
+| --- | --- | --- |
+| Bottle | (0.22, -0.10, 0.045) | back to start pose |
+| Tumbler | (0.20, 0.09, 0.037) | back to start pose |
+
+Both drop a few mm onto the mat at start. To move them, change `GLASS_BOTTLE_POS` and `TUMBLER_POS`. The base task's light, mat and camera randomization applies. `-DR` adds the same robot colour, HDRI sky and wider mat rotation randomization as the vials DR task. Translucency and the refraction settings come from the base task config.
+
+Both assets have to exist first:
+
+```bash
+python asset_gen/make_bottle.py --shoulder ellipse --mass-g 12 --wall 0.3 -o source/sim_to_real_so101/assets/usd/Bottle.usda
+python asset_gen/make_tumbler.py -o source/sim_to_real_so101/assets/usd/Tumbler.usda
+```
+
+Look at it, or teleop it with the leader arm (REMOTE_HOST_SETUP.md step 10c) or the sliders:
+
+```bash
+/workspace/isaaclab/_isaac_sim/python.sh remote/preview_scene.py \
+  --task Lerobot-So101-Teleop-Glassware-DR --livestream 2 --enable_cameras --kit_args "$KIT" \
+  2>&1 | tee outputs/glassware_preview.log
+
+TELEOP_DEVICE=virtual PYTHONUNBUFFERED=1 \
+/workspace/isaaclab/_isaac_sim/python.sh source/sim_to_real_so101/scripts/lerobot_agent.py \
+  --task Lerobot-So101-Teleop-Glassware-DR --teleop_device virtual --livestream 2 --kit_args "$KIT" \
+  2>&1 | tee outputs/glassware_teleop.log
+```
+
+The bead and liquid fills work here too, in either glass: `BOTTLE_FILL=beads` (or `pbd`) as above, plus `FILL_TARGET=bottle` (default) or `FILL_TARGET=tumbler`.
+
 ## Iterating
 
 1. Change parameters, regenerate `Bottle.usda` on the Mac, check the PNG and Quick Look.
