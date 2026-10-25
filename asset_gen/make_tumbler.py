@@ -8,6 +8,8 @@ Shape (all in mm, Z up, origin at the centre of the glass's underside):
     as a --notch-width wide triangular notch in the bottom edge, narrowing up to --hull-h (sides
     nearly straight at first, then curving in, (1 - u^a)^b), then running straight up as a narrow
     --groove-width groove that fades out just below the rim
+  - underside: concave (cosine bell, --punt-depth higher at the centre, resting on a ring at the
+    edge), with a radial V-cut from each side dent's notch to a smooth --centre-d disc
 
 USD layout (same conventions as make_bottle.py):
   /Tumbler             Xform, defaultPrim, RigidBodyAPI + MassAPI (mass, COM, inertia from the mesh)
@@ -55,6 +57,9 @@ class TumblerParams:
     groove_depth: float = 0.8    # depth of the straight groove, mm
     groove_fade: float = 10.0    # length over which the groove narrows and fades out at the top, mm
     top_margin: float = 3.0      # groove ends this far below the top of the rim, mm
+    punt_depth: float = 3.0      # underside is concave: centre this much higher than the resting ring, mm
+    centre_d: float = 10.0       # smooth disc in the middle of the underside where the radial cuts end, mm
+    bottom_cuts: bool = True     # radial V-cuts on the underside, one per side dent
     density: float = 2.45        # g/cm^3 (lead-free crystal glass); mass = volume * density
     mass_g: float = 0.0          # >0 overrides the computed mass (weigh yours!)
     static_friction: float = 0.6
@@ -82,10 +87,11 @@ class TumblerParams:
 def profile(p: TumblerParams):
     """Closed (r, z, tag) profile: underside -> outside wall -> rim -> inside wall -> floor.
 
-    tag 'o' = outside (gets the cut pattern), 'n' = no displacement.
+    tag 'u' = underside (concave, radial cuts), 'o' = outside wall (side cuts), 'n' = untouched.
     """
     R, H, fo, fi, rr = p.R, p.height, p.bottom_fillet, p.floor_fillet, p.wall_top / 2
-    pts = [(r, 0.0, "o") for r in np.linspace(0, R - fo, 6)]
+    n_u = max(8, int(round((R - fo) / p.res_mm)))
+    pts = [(r, punt_z(p, r), "u") for r in np.linspace(0, R - fo, n_u + 1)]
     pts += [(R - fo + fo * math.sin(a), fo - fo * math.cos(a), "o") for a in np.linspace(0, math.pi / 2, 6)[1:]]
     top = H - rr - 1.0
     n = max(2, int(round((top - fo) / p.dz)))
@@ -101,6 +107,41 @@ def profile(p: TumblerParams):
     pts += [(rc + fi * math.cos(a), zf - fi * math.sin(a), "n") for a in np.linspace(0, math.pi / 2, 7)[1:]]
     pts += [(r, p.base_h, "n") for r in np.linspace(rc, 0, 5)[1:]]
     return pts
+
+
+def punt_z(p: TumblerParams, r: float) -> float:
+    """Height of the concave underside at radius r: cosine bell, punt_depth at the centre, 0 at the edge."""
+    edge = p.R - p.bottom_fillet
+    return p.punt_depth * 0.5 * (1 + math.cos(math.pi * min(r, edge) / edge))
+
+
+def bottom_cut(p: TumblerParams, theta: np.ndarray, r: float) -> np.ndarray:
+    """Upward depth (mm) of the radial V-cuts on the underside at angles theta and radius r.
+
+    Each cut lines up with a side dent: as wide as the notch at the rim, narrowing linearly (with
+    its depth) to a point at the edge of the smooth centre disc. It eases out over the last few mm
+    before the rim, where the side notch takes over.
+    """
+    rc = 0.5 * p.centre_d
+    if not (p.cuts and p.bottom_cuts) or r <= rc:
+        return np.zeros_like(theta)
+    edge = p.R - p.bottom_fillet
+    pitch = 2 * math.pi / p.dents
+    t = (r - rc) / (p.R - rc)
+    hw = 0.5 * min(p.notch_width, pitch * p.R) * t
+    depth = p.notch_depth * t * float(np.clip((edge - r) / 3.0, 0, 1))
+    ds = np.abs(theta - np.round(theta / pitch) * pitch) * r
+    return depth * np.clip(1 - ds / max(hw, 1e-6), 0, None)
+
+
+def underside(p: TumblerParams, theta: np.ndarray, r: float, z: float):
+    """Displaced underside point(s): the side notch pulls the outer few mm inward, the radial cut lifts it."""
+    edge_w = 5.0
+    w = float(np.clip((r - (p.R - p.bottom_fillet - edge_w)) / edge_w, 0, 1))
+    w = w * w * (3 - 2 * w)  # smoothstep
+    rr = r - cut_depth(p, theta, 0.0) * w
+    zz = z + bottom_cut(p, theta, r)
+    return rr, zz
 
 
 def dent_shape(p: TumblerParams, z: float) -> tuple[float, float]:
@@ -164,11 +205,13 @@ def build_mesh(p: TumblerParams):
             rings.append([len(points)] * S)
             points.append((0.0, 0.0, z))
             continue
-        rr = np.full(S, r)
+        rr, zz = np.full(S, r), np.full(S, z)
         if tag == "o":
-            rr = r - cut_depth(p, th, z) * (r / p.R)  # scales the underside too, so notches stay valid
+            rr = r - cut_depth(p, th, z) * (r / p.R)
+        elif tag == "u":
+            rr, zz = underside(p, th, r, z)
         rings.append(list(range(len(points), len(points) + S)))
-        points += list(zip(rr * c, rr * s, np.full(S, z)))
+        points += list(zip(rr * c, rr * s, zz))
     counts, idx = [], []
     for k in range(len(prof) - 1):
         a, b = rings[k], rings[k + 1]
@@ -334,14 +377,22 @@ def preview(p: TumblerParams, path: str):
     import matplotlib.pyplot as plt
     from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-    fig = plt.figure(figsize=(16, 6.2))
-    ax = fig.add_subplot(1, 3, 1)
+    fig = plt.figure(figsize=(21, 6.2))
+    ax = fig.add_subplot(1, 4, 1)
     prof = profile(p)
     rs = [q[0] for q in prof]
     zs = [q[1] for q in prof]
     ax.fill(rs, zs, color="#cfe3ef", ec="#1f5f8b", lw=0.8, label="section (between cuts)")
     th = np.array([0.0])  # through the centre of a dent
-    cut = [(q[0] - (cut_depth(p, th, q[1])[0] * q[0] / p.R if q[2] == "o" else 0), q[1]) for q in prof]
+    cut = []
+    for r, z, tag in prof:
+        if tag == "o":
+            cut.append((r - cut_depth(p, th, z)[0] * r / p.R, z))
+        elif tag == "u":
+            ru, zu = underside(p, th, r, z)
+            cut.append((float(ru[0]), float(zu[0])))
+        else:
+            cut.append((r, z))
     ax.plot([-c[0] for c in cut], [c[1] for c in cut], color="#1f5f8b", lw=0.8)
     ax.fill([-c[0] for c in cut], [c[1] for c in cut], color="#cfe3ef")
     pieces, interior = collider_pieces(p)
@@ -359,7 +410,7 @@ def preview(p: TumblerParams, path: str):
     ax.legend(loc="upper right", fontsize=7)
 
     # unrolled outside wall: cut depth over 3 dent spacings (outline of each dent)
-    axm = fig.add_subplot(1, 3, 2)
+    axm = fig.add_subplot(1, 4, 2)
     pitch_mm = 2 * math.pi * p.R / p.dents
     smm = np.linspace(-1.5 * pitch_mm, 1.5 * pitch_mm, 600)
     zz = np.linspace(0, p.height, 330)
@@ -374,7 +425,7 @@ def preview(p: TumblerParams, path: str):
     axm.set_title("Outside unrolled: cut depth (3 dents)", fontsize=9)
     fig.colorbar(im, ax=axm, fraction=0.046, pad=0.02, label="depth, mm")
 
-    ax3 = fig.add_subplot(1, 3, 3, projection="3d")
+    ax3 = fig.add_subplot(1, 4, 3, projection="3d")
     q = TumblerParams(**{**vars(p), "res_mm": max(p.res_mm, 1.5), "dz": 1.5})
     pts, counts, idx, tris, vn = build_mesh(q)
     outer = pts[tris].mean(axis=1)
@@ -398,6 +449,28 @@ def preview(p: TumblerParams, path: str):
     ax3.set_title(f"Outside ({q.dents} dents: notch -> hull taper to {q.hull_h:g} mm -> "
                   f"{q.groove_width:g} mm groove)"
                   if q.cuts else "Outside (no cuts)", fontsize=9)
+
+    # underside, seen from below
+    axb = fig.add_subplot(1, 4, 4, projection="3d")
+    cen = pts[tris].mean(axis=1)
+    tri = tris[cen[:, 2] < q.punt_depth + q.notch_depth + 0.5]
+    tri = tri[np.hypot(*pts[tri].mean(axis=1)[:, :2].T) < q.R - 0.3]
+    polys = pts[tri]
+    n = np.cross(polys[:, 1] - polys[:, 0], polys[:, 2] - polys[:, 0])
+    n /= np.linalg.norm(n, axis=1, keepdims=True).clip(1e-12)
+    light = np.array([0.45, -0.35, -0.82])
+    light /= np.linalg.norm(light)
+    sh = 0.2 + 0.8 * np.clip(n @ light, 0, 1)
+    cols = np.stack([0.55 * sh + 0.35, 0.7 * sh + 0.25, 0.85 * sh + 0.15, np.full_like(sh, 1.0)], 1)
+    axb.add_collection3d(Poly3DCollection(polys, facecolors=cols, edgecolors="none"))
+    axb.set_xlim(-q.R, q.R)
+    axb.set_ylim(-q.R, q.R)
+    axb.set_zlim(-q.R + 6, q.R + 6)
+    axb.set_box_aspect((1, 1, 1))
+    axb.view_init(elev=-80, azim=-90)
+    axb.set_axis_off()
+    axb.set_title(f"Underside: {q.punt_depth:g} mm concave, {q.dents} radial cuts, "
+                  f"Ø{q.centre_d:g} mm smooth centre", fontsize=9)
     fig.tight_layout()
     fig.savefig(path, dpi=130)
     plt.close(fig)
