@@ -11,6 +11,7 @@ Helper files in [`remote/`](remote/):
 | `run_teleop.sh` | server | Starts `teleop-docker` without X11, with all driver capabilities |
 | `preview_scene.py` | server, in container | Loads a course task with no arm connected, resets periodically |
 | `serial_bridge.py` | Mac | Exposes the leader arm's serial port over TCP |
+| `kit_env.sh` | server, in container | `source remote/kit_env.sh` sets `$KIT` (livestream flags) and `PYTHONUNBUFFERED` |
 | `joint_teleop_app.py` | Mac | Joint-slider teleop UI in the browser, used with `lerobot_agent.py --teleop_device virtual` |
 | `leader_sender.py` | Mac | Reads the leader arm locally and streams joint positions to the sim (recommended over `serial_bridge.py`) |
 
