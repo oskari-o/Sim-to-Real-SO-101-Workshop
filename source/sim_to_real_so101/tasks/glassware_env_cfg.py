@@ -1,9 +1,10 @@
 # Glassware scene: the course's robot, lightbox, cameras and mat, with only two props on the
-# mat, the transparent PET bottle and the cut-crystal tumbler. No vials, no rack, no success
+# mat, the transparent PET bottle (with a pour spout) and the cut-crystal tumbler. No vials, no rack, no success
 # terms; teleop and recording work the same as in the other tasks.
 #
 # Assets (generate them first, see BOTTLE_SCENE.md):
-#   asset_gen/make_bottle.py  -> source/sim_to_real_so101/assets/usd/Bottle.usda
+#   asset_gen/make_bottle.py --spout -> source/sim_to_real_so101/assets/usd/BottleSpout.usda
+#     (GLASSWARE_BOTTLE=Bottle.usda uses the plain bottle instead)
 #   asset_gen/make_tumbler.py -> source/sim_to_real_so101/assets/usd/Tumbler.usda
 #
 # Optional fill, same environment variables as the Vials-Bottle tasks (BOTTLE_FILL=none|beads|pbd,
@@ -27,7 +28,7 @@ from sim_to_real_so101.mdp import (
 )
 
 from .task_env_cfg import SO101TaskEnvCfg, SO101TaskSceneCfg, TaskEventCfg
-from .vials_bottle_env_cfg import BOTTLE_CFG, BOTTLE_USD, apply_bottle_fill
+from .vials_bottle_env_cfg import BOTTLE_CFG, apply_bottle_fill
 
 assets_path = os.path.dirname(os.path.abspath(assets.__file__))
 
@@ -36,6 +37,7 @@ assets_path = os.path.dirname(os.path.abspath(assets.__file__))
 GLASS_BOTTLE_POS = (0.22, -0.10, 0.045)
 TUMBLER_POS = (0.20, 0.09, 0.037)
 TUMBLER_USD = f"{assets_path}/usd/Tumbler.usda"
+GLASS_BOTTLE_USD = f"{assets_path}/usd/{os.getenv('GLASSWARE_BOTTLE', 'BottleSpout.usda')}"
 
 TUMBLER_CFG = RigidObjectCfg(
     prim_path="{ENV_REGEX_NS}/Tumbler",
@@ -59,7 +61,10 @@ def _reset_to_start(name: str) -> EventTerm:
 
 @configclass
 class GlasswareSceneCfg(SO101TaskSceneCfg):
-    bottle = BOTTLE_CFG.replace(init_state=RigidObjectCfg.InitialStateCfg(pos=GLASS_BOTTLE_POS))
+    bottle = BOTTLE_CFG.replace(
+        spawn=BOTTLE_CFG.spawn.replace(usd_path=GLASS_BOTTLE_USD),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=GLASS_BOTTLE_POS),
+    )
     tumbler = TUMBLER_CFG.replace()
 
 
@@ -114,7 +119,7 @@ def _apply_fill(env_cfg) -> None:
     if target == "tumbler":
         apply_bottle_fill(env_cfg, TUMBLER_USD, TUMBLER_POS)
     elif target == "bottle":
-        apply_bottle_fill(env_cfg, BOTTLE_USD, GLASS_BOTTLE_POS)
+        apply_bottle_fill(env_cfg, GLASS_BOTTLE_USD, GLASS_BOTTLE_POS)
     else:
         raise ValueError(f"FILL_TARGET must be bottle or tumbler, got {target!r}")
 

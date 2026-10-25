@@ -20,6 +20,7 @@ Run anywhere (Mac, server, inside the container with /isaac-sim/python.sh).
   python3 make_bottle.py -o Bottle.usda
   python3 make_bottle.py --body-d 39 --body-h 90 --shoulder-h 10 --neck-d 20 --neck-h 16 --mass-g 15
   python3 make_bottle.py --shoulder ellipse --no-threads --preview bottle_preview.png
+  python3 make_bottle.py --shoulder ellipse --spout -o BottleSpout.usda   # with a pour spout
 """
 from __future__ import annotations
 
@@ -60,6 +61,8 @@ class BottleParams:
     collider_wall: float = 2.5  # wall thickness of the hollow collider, mm (thicker than the real wall so
                                 # small beads / particles can't tunnel; the interior is that much smaller)
     collider_sectors: int = 16  # angular pieces of the hollow collider
+    spout: bool = False         # put a liquor pour spout (make_spout.py) in the neck
+    spout_mass_g: float = 0.0   # >0: weighed spout mass; 0: computed from volumes (~27 g)
 
     @property
     def total_h(self) -> float:
@@ -401,12 +404,30 @@ def build(p: BottleParams, out_path: str):
     else:
         raise ValueError(f"unknown collider {p.collider!r}")
 
+    # --- optional pour spout: part of the same rigid body
+    spout_masses = []
+    if p.spout:
+        from make_spout import SpoutParams, add_spout
+        spout_masses = add_spout(stage, "/Bottle/spout", SpoutParams(mass_g=p.spout_mass_g), p.total_h,
+                                 neck_bore_d(p), phys_mat, looks)
+        info["spout_g"] = sum(m for m, _ in spout_masses) * 1000
+
     # --- rigid body + mass
     UsdPhysics.RigidBodyAPI.Apply(root.GetPrim())
     mass_api = UsdPhysics.MassAPI.Apply(root.GetPrim())
     mass_kg = p.mass_g / 1000
-    mass_api.CreateMassAttr(mass_kg)
     props = shell_mass_properties(vis_pts, vis_c, vis_i, mass_kg)
+    if props and spout_masses:  # combine: bottle shell + spout parts as point masses
+        com_b, I_b, tm = props
+        items = [(mass_kg, np.asarray(com_b), np.diag(I_b))]
+        items += [(m, np.asarray(c) * MM, np.zeros((3, 3))) for m, c in spout_masses]
+        M = sum(m for m, _, _ in items)
+        com = sum(m * c for m, c, _ in items) / M
+        I = sum(Ii + m * (np.dot(c - com, c - com) * np.eye(3) - np.outer(c - com, c - com))
+                for m, c, Ii in items)
+        props = (com, np.diag(I), tm)  # off-diagonal terms from the bent nozzle are negligible
+        mass_kg = M
+    mass_api.CreateMassAttr(mass_kg)
     info["mass_kg"] = mass_kg
     if props:
         com, inertia, tm = props
@@ -419,6 +440,12 @@ def build(p: BottleParams, out_path: str):
     info.update(render_faces=len(vis_c), collision_faces=col_faces,
                 capacity_ml=capacity_ml(p))
     return info
+
+
+def neck_bore_d(p: BottleParams) -> float:
+    """Inside diameter of the neck finish, mm."""
+    root = p.neck_d / 2 - (p.thread_depth if p.threads else 0.0)
+    return 2 * (root - p.neck_wall)
 
 
 def capacity_ml(p: BottleParams) -> float:
@@ -468,7 +495,11 @@ def preview(p: BottleParams, path: str):
     ax.set_title(f"Cross-section (Ø{p.body_d:g} body, Ø{p.neck_d:g} neck), mm\n"
                  f"wall {p.wall} / neck {p.neck_wall} / base {p.base_wall} — capacity ≈ {capacity_ml(p):.0f} ml",
                  fontsize=9)
-    ax.set_aspect("equal"); ax.set_xlim(-R - 4, R + 26); ax.legend(loc="lower right", fontsize=8)
+    if p.spout:
+        from make_spout import SpoutParams, draw_section
+        draw_section(ax, SpoutParams(), neck_bore_d(p), z0=p.total_h)
+    ax.set_aspect("equal"); ax.set_xlim(-R - 4, R + 26 + (15 if p.spout else 0))
+    ax.legend(loc="lower right", fontsize=8)
 
     ax3 = fig.add_subplot(1, 2, 2, projection="3d")
     pts, counts, idx, _ = revolve(outer_profile(p, True), 64)
@@ -483,6 +514,20 @@ def preview(p: BottleParams, path: str):
         cols.append((0.55 * s + 0.3, 0.75 * s + 0.2, 0.9 * s + 0.1, 0.55))
     ax3.add_collection3d(Poly3DCollection(polys, facecolors=cols, edgecolors="none"))
     h = p.total_h
+    if p.spout:
+        from make_spout import SpoutParams, parts
+        base = {"rubber": np.array([0.12, 0.12, 0.13]), "steel": np.array([0.72, 0.74, 0.78])}
+        for name, mat, sp, _, _, tris in parts(SpoutParams(), neck_bore_d(p)):
+            if name in ("seal", "air_tube"):
+                continue  # inside the bottle
+            sp = sp + np.array([0.0, 0.0, p.total_h])
+            poly = sp[tris]
+            n = np.cross(poly[:, 1] - poly[:, 0], poly[:, 2] - poly[:, 0])
+            n /= np.linalg.norm(n, axis=1, keepdims=True).clip(1e-12)
+            sh = (0.35 + 0.65 * np.clip(n @ light, 0, 1))[:, None]
+            ax3.add_collection3d(Poly3DCollection(poly, facecolors=np.clip(base[mat] * (0.5 + sh), 0, 1),
+                                                  edgecolors="none"))
+        h = p.total_h + 60
     ax3.set_xlim(-h / 2, h / 2); ax3.set_ylim(-h / 2, h / 2); ax3.set_zlim(0, h)
     ax3.set_box_aspect((1, 1, 1)); ax3.view_init(elev=12, azim=-60); ax3.set_axis_off()
     ax3.set_title(f"Outer surface ({p.shoulder} shoulder, {'threads' if p.threads else 'no threads'})",

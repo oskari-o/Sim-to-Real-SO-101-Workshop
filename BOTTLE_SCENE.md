@@ -223,9 +223,23 @@ python asset_gen/make_tumbler.py -o source/sim_to_real_so101/assets/usd/Tumbler.
 
 Riedel's product page lists the Neat as 77 mm high × 70 mm wide, so measure again before relying on the defaults (`--height`, `--diameter`). The render mesh is ~62k faces (6.5 MB); `--res-mm` (circumferential spacing, 4× finer around each groove) and `--dz` trade detail for size. The preview shows the section, the outside unrolled with the cut depth (the quickest way to judge the dent outline), the outside, and the underside seen from below. The collider ignores the cuts: a solid base disc plus 16 convex wall sectors following the inner taper.
 
+## Pour spout
+
+`asset_gen/make_spout.py` models a liquor pour spout. `make_bottle.py --spout` puts it in the bottle's neck as part of the bottle's rigid body, with its mass added to the bottle's mass, centre of mass and inertia. Parts, measured from the top of the neck lip:
+
+| Part | Size | Material |
+| --- | --- | --- |
+| Flange on the neck lip | Ø28 × 3 mm | black rubber |
+| Collar ("stem") | Ø24 × 4 mm (height assumed) | stainless |
+| Nozzle | 47 mm along the centreline, Ø8 mm at the collar tapering to Ø5 mm at the tip, 0.6 mm wall, straight 10 mm then a 10° bend, tip cut square to the tube (`--tip-cut-deg` to slant it) | stainless |
+| Seal | 24 mm long into the neck, 4 conical fins squeezed to the 16 mm neck bore | black rubber |
+| Air tube | Ø3 mm, reaching 55 mm down from the nozzle stem (24 mm below the seal) | stainless |
+
+A Ø6 mm liquid channel runs through the flange, collar and seal into the nozzle bore, and the colliders leave it open, so the bead or liquid fill can actually pour out. The computed mass is ~25 g (13 g of it a solid steel collar; a real stamped collar is lighter): weigh yours and pass `--spout-mass-g`. With it, the empty bottle's centre of mass sits at ~98 mm, so the empty bottle is top-heavy and tips easily; a fill brings it down. Every dimension is a flag of `make_spout.py` (`python asset_gen/make_spout.py --help`), which also writes a standalone `Spout.usda` and a preview.
+
 ## Glassware task: mat, bottle and tumbler only
 
-`Lerobot-So101-Teleop-Glassware` (and `-DR`) is the course's base task scene (robot, lightbox with its light and D455 camera, wrist camera, mat) with only the bottle and the tumbler on the mat. There are no vials, no rack and no success terms. It's defined in `source/sim_to_real_so101/tasks/glassware_env_cfg.py`, and the other tasks are untouched.
+`Lerobot-So101-Teleop-Glassware` (and `-DR`) is the course's base task scene (robot, lightbox with its light and D455 camera, wrist camera, mat) with only the bottle (with its pour spout, `BottleSpout.usda`) and the tumbler on the mat. There are no vials, no rack and no success terms. It's defined in `source/sim_to_real_so101/tasks/glassware_env_cfg.py`, and the other tasks are untouched.
 
 | Prop | Start position (x, y, z), m | Reset |
 | --- | --- | --- |
@@ -237,9 +251,11 @@ Both drop a few mm onto the mat at start. To move them, change `GLASS_BOTTLE_POS
 Both assets have to exist first:
 
 ```bash
-python asset_gen/make_bottle.py --shoulder ellipse --mass-g 12 --wall 0.3 -o source/sim_to_real_so101/assets/usd/Bottle.usda
+python asset_gen/make_bottle.py --shoulder ellipse --mass-g 12 --wall 0.3 --spout -o source/sim_to_real_so101/assets/usd/BottleSpout.usda
 python asset_gen/make_tumbler.py -o source/sim_to_real_so101/assets/usd/Tumbler.usda
 ```
+
+`GLASSWARE_BOTTLE=Bottle.usda` at launch uses the plain bottle instead.
 
 Look at it, or teleop it with the leader arm (REMOTE_HOST_SETUP.md step 10c) or the sliders:
 
