@@ -5,8 +5,9 @@ Sturdier than forwarding the serial port (serial_bridge.py + socat): the motor b
 polled here on the Mac, at full USB speed, and only finished joint positions cross the
 network, one way. A late packet just means a slightly older pose, never a crash.
 
-Run on the Mac, in a venv with LeRobot installed and the leader calibrated:
-    python remote/leader_sender.py --port /dev/cu.usbmodemXXXX --id <calibration id>
+Run on the Mac, in a venv with LeRobot + the Feetech SDK and the leader calibrated:
+    uv pip install -r remote/requirements-mac.txt        # 'lerobot[feetech]' (quote it in zsh)
+    uv run remote/leader_sender.py --port /dev/tty.usbserial-XXXX --id <calibration id>
     ssh -N -R 54322:localhost:54322 upcloud_gpu
 and on the server run lerobot_agent.py with --teleop_device virtual (same as the slider app;
 the two can't run at the same time since they use the same port).

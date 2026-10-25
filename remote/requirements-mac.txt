@@ -1,0 +1,5 @@
+# Mac-side tools in remote/: leader_sender.py (needs LeRobot with the Feetech motor SDK)
+# and serial_bridge.py (pyserial). joint_teleop_app.py needs nothing extra.
+# Tested: lerobot 0.6.1, feetech-servo-sdk 1.0.0, Python 3.12.
+lerobot[feetech]>=0.6
+pyserial

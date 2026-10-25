@@ -212,7 +212,7 @@ The arm's serial port is forwarded Mac → SSH tunnel → `socat` virtual port i
 
 ```bash
 ls /dev/cu.usbmodem*
-pip3 install pyserial
+pip3 install pyserial      # or: uv pip install -r remote/requirements-mac.txt
 python3 remote/serial_bridge.py /dev/cu.usbmodemXXXX
 ```
 
@@ -283,11 +283,32 @@ Running the script file with `python.sh` instead of the `lerobot_agent` entry po
 
 Step 10 forwards the raw serial bus, so every motor read is a request/reply over the internet. One late reply ends the run with `Failed to sync read 'Present_Position' ... There is no status packet!`. (The agent now holds the last pose through occasional misses, but the link is still fragile.) `remote/leader_sender.py` instead reads the arm on the Mac, using the Mac's own LeRobot and calibration, and streams finished joint positions to the sim over the same channel as the slider app. No socat, no calibration copy, no serial timing over the network.
 
-**Mac, terminal 1** (venv with LeRobot; `--id` is your calibration file's name without `.json`, see `ls ~/.cache/huggingface/lerobot/calibration/teleoperators/so_leader/`):
+**Mac, once: install LeRobot with the Feetech motor SDK** into the repo's venv. Plain `lerobot` isn't enough: the leader's motor bus needs the `feetech` extra. Keep the quotes, because zsh treats the brackets as a glob otherwise (`zsh: no matches found`).
 
 ```bash
-python remote/leader_sender.py --port /dev/cu.usbmodemXXXX --id <calibration id>
+cd ~/projects/Sim-to-Real-SO-101-Workshop
+source .venv/bin/activate          # the venv from BOTTLE_SCENE.md; or: uv venv .venv --python 3.12
+uv pip install -r remote/requirements-mac.txt     # = 'lerobot[feetech]' + pyserial
 ```
+
+Tested with `lerobot==0.6.1` and `feetech-servo-sdk==1.0.0` on Python 3.12. LeRobot pins its own numpy, torch and pillow versions; that's fine for `asset_gen/` in the same venv.
+
+**Mac: find the port and the calibration id**
+
+```bash
+ls /dev/tty.usbserial-* /dev/cu.usbmodem* 2>/dev/null   # leader's USB serial port; which name depends on the adapter
+ls ~/.cache/huggingface/lerobot/calibration/teleoperators/so_leader/   # e.g. leader_arm.json -> id is leader_arm
+```
+
+If `so_leader/` is empty or missing, calibrate first: `lerobot-calibrate --teleop.type=so101_leader --teleop.port=<port> --teleop.id=<name>`.
+
+**Mac, terminal 1:**
+
+```bash
+uv run remote/leader_sender.py --port /dev/tty.usbserial-11130 --id leader_arm
+```
+
+It should print `leader connected`, `waiting for the sim on 127.0.0.1:54322`, and then a line of six joint values that changes as you move the arm, for example `5.4  -99.4  100.0  12.2  -52.2  0.3`. That's shoulder pan, shoulder lift, elbow, wrist flex, wrist roll and gripper: −100..100 for the arm joints, 0..100 for the gripper. Values stuck at ±100 on a joint that isn't at its end stop mean that joint's calibration range is off; recalibrate.
 
 **Mac, terminal 2:**
 
@@ -323,6 +344,8 @@ Newer LeRobot reports degrees by default; the sender forces the -100..100 range 
 | `A camera was spawned without the --enable_cameras flag` | Add `--enable_cameras` |
 | `Could not connect on port '/dev/ttyACM1'` | socat not running in the container (gone after every container restart), or the bridge/tunnel isn't up; or use step 10c instead |
 | `Failed to sync read ... There is no status packet!` | Serial forwarding (step 10) too slow or jittery for the motor protocol; use step 10c |
+| `leader_sender.py`: `No module named 'lerobot'` / `'feetech-servo-sdk' is required` | `uv pip install -r remote/requirements-mac.txt` (or `uv pip install 'lerobot[feetech]'`, with quotes) in the venv (step 10c) |
+| `leader_sender.py` asks to calibrate | `--id` doesn't match a file in `~/.cache/huggingface/lerobot/calibration/teleoperators/so_leader/` |
 | Black screen in client | App not fully loaded yet, wrong `publicIp`, or UDP blocked |
 | `[VirtualLeader] waiting for teleop app on 127.0.0.1:54322` repeating | `joint_teleop_app.py` not running on the Mac, or the `ssh -R 54322` tunnel isn't up (step 10b) |
 | Teleop page says "waiting for sim" | Agent not started with `--teleop_device virtual`, or tunnel down |
