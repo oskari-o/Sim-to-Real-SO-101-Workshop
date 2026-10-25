@@ -4,13 +4,15 @@
 (`shoulder_pan.pos` ... `gripper.pos`, arm joints in -100..100, gripper in 0..100),
 so lerobot_agent.py's mapping and recording code work unchanged.
 
-The targets come from remote/joint_teleop_app.py running on your local machine.
-That app listens on TCP (default 127.0.0.1:54322); expose it to the server with
-`ssh -N -R 54322:localhost:54322 upcloud_gpu`, and this class connects to it.
+The targets come from a program on your local machine that listens on TCP
+(default 127.0.0.1:54322): remote/joint_teleop_app.py (sliders) or
+remote/leader_sender.py (the physical leader arm, read locally). Expose it to the
+server with `ssh -N -R 54322:localhost:54322 upcloud_gpu`; this class connects to it.
 
 Wire protocol: newline-delimited JSON, both ways.
   app -> sim : {"type": "target", "action": {"shoulder_pan.pos": 0.0, ...}}
                {"type": "cmd", "cmd": "reset" | "record" | "cancel"}
+               {"type": "config", "max_step": float}   (optional; <= 0 disables rate limiting)
   sim -> app : {"type": "state", "action": {...}, "home": {...}}   (on connect and after resets)
                {"type": "status", "recording": bool}
 """
@@ -151,6 +153,10 @@ class VirtualLeader:
                     if j in act:
                         lo, hi = LIMITS[j]
                         self._target[j] = max(lo, min(hi, float(act[j])))
+        elif kind == "config":
+            if "max_step" in msg:
+                self.max_step = float(msg["max_step"])
+                print(f"[VirtualLeader] max_step set to {self.max_step} by the sender")
         elif kind == "cmd":
             cmd = msg.get("cmd")
             if cmd in ("reset", "record", "cancel"):

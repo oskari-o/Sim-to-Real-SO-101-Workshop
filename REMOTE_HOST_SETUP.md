@@ -12,6 +12,7 @@ Helper files in [`remote/`](remote/):
 | `preview_scene.py` | server, in container | Loads a course task with no arm connected, resets periodically |
 | `serial_bridge.py` | Mac | Exposes the leader arm's serial port over TCP |
 | `joint_teleop_app.py` | Mac | Joint-slider teleop UI in the browser, used with `lerobot_agent.py --teleop_device virtual` |
+| `leader_sender.py` | Mac | Reads the leader arm locally and streams joint positions to the sim (recommended over `serial_bridge.py`) |
 
 Placeholders used below: `<SERVER_IP>` is the server's public IPv4, `<HOME_IP>` is your own public IPv4 (`curl -4 ifconfig.me` on the Mac).
 
@@ -278,6 +279,28 @@ The log prints `[VirtualLeader] connected`, and the page's status pill turns gre
 
 Running the script file with `python.sh` instead of the `lerobot_agent` entry point guarantees the checked-out code runs. Order doesn't matter much: the agent keeps waiting for the app, and reconnects if it drops.
 
+## 10c. Teleop with the leader arm, read on the Mac (recommended)
+
+Step 10 forwards the raw serial bus, so every motor read is a request/reply over the internet. One late reply ends the run with `Failed to sync read 'Present_Position' ... There is no status packet!`. (The agent now holds the last pose through occasional misses, but the link is still fragile.) `remote/leader_sender.py` instead reads the arm on the Mac, using the Mac's own LeRobot and calibration, and streams finished joint positions to the sim over the same channel as the slider app. No socat, no calibration copy, no serial timing over the network.
+
+**Mac, terminal 1** (venv with LeRobot; `--id` is your calibration file's name without `.json`, see `ls ~/.cache/huggingface/lerobot/calibration/teleoperators/so_leader/`):
+
+```bash
+python remote/leader_sender.py --port /dev/cu.usbmodemXXXX --id <calibration id>
+```
+
+**Mac, terminal 2:**
+
+```bash
+ssh -N -R 54322:localhost:54322 upcloud_gpu
+```
+
+**Server, container shell:** the same command as 10b (`--teleop_device virtual`), any task.
+
+The sender prints the six joint values about twice a second, and `simulator connected` once the agent is up. Type `r`, `s` or `c` + Enter in the sender terminal for reset world, start/stop recording and cancel episode. The sim limits each joint to 10 units per step (`--max-step`), which only matters right after connecting, if the leader is far from the sim's start pose. The slider app and the sender use the same port, so run one or the other.
+
+Newer LeRobot reports degrees by default; the sender forces the -100..100 range the sim expects. If a joint still moves the wrong way or with an offset, the calibration on the Mac is the place to look (`lerobot-calibrate`).
+
 ## 11. Logs and housekeeping
 
 - Isaac Sim (Kit) logs: host `~/docker/isaac-sim/logs/Kit/<app>/5.1/kit_*.log`, container `/root/.nvidia-omniverse/logs/Kit/`.
@@ -298,7 +321,8 @@ Running the script file with `python.sh` instead of the `lerobot_agent` entry po
 | `ldconfig -p | grep libnvidia-encode` empty in container | Missing `NVIDIA_DRIVER_CAPABILITIES=all`, or compute-only host driver (step 5) |
 | Segfault in `librtx.scenedb.plugin.so` at startup | 595 driver; move to 580 (step 5) |
 | `A camera was spawned without the --enable_cameras flag` | Add `--enable_cameras` |
-| `Could not connect on port '/dev/ttyACM1'` | Leader arm not bridged (step 10), or use `preview_scene.py` |
+| `Could not connect on port '/dev/ttyACM1'` | socat not running in the container (gone after every container restart), or the bridge/tunnel isn't up; or use step 10c instead |
+| `Failed to sync read ... There is no status packet!` | Serial forwarding (step 10) too slow or jittery for the motor protocol; use step 10c |
 | Black screen in client | App not fully loaded yet, wrong `publicIp`, or UDP blocked |
 | `[VirtualLeader] waiting for teleop app on 127.0.0.1:54322` repeating | `joint_teleop_app.py` not running on the Mac, or the `ssh -R 54322` tunnel isn't up (step 10b) |
 | Teleop page says "waiting for sim" | Agent not started with `--teleop_device virtual`, or tunnel down |

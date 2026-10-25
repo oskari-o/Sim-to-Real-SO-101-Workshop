@@ -167,6 +167,7 @@ def main():
         robot_iface.init_device()
         robot_iface.connect()
     virtual = isinstance(robot_iface.robot, VirtualLeader)
+    last_real_action, read_failures = None, 0
     was_recording = False
 
     # Allocate action tensor
@@ -202,7 +203,22 @@ def main():
     while simulation_app.is_running():
         # run everything in inference mode
         with torch.inference_mode():
-            real_action = robot_iface.robot.get_action()
+            try:
+                real_action = robot_iface.robot.get_action()
+                last_real_action, read_failures = real_action, 0
+            except ConnectionError as e:
+                # A leader read over a slow link (e.g. serial forwarded over SSH) can time out.
+                # Hold the last pose instead of crashing; give up only if it keeps failing.
+                read_failures += 1
+                if last_real_action is None or read_failures > 120:
+                    raise
+                if read_failures == 1 or read_failures % 30 == 0:
+                    print(f"[WARN]: leader read failed ({read_failures}x), holding last pose: {e}")
+                try:
+                    robot_iface.robot.bus.port_handler.clearPort()  # drop late replies
+                except Exception:  # noqa: BLE001
+                    pass
+                real_action = last_real_action
             real_action, mapped_action = robot_iface.real_to_sim_obs_processor(
                 real_action
             )
