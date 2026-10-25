@@ -213,15 +213,15 @@ Things to expect and check:
 | Solid base (inside floor height) | 13 mm |
 | Wall | 6 mm at the floor, tapering to 2 mm at the top, fully rounded rim |
 | Cut pattern | 15 V-cut dents: an 11 mm wide, 2.5 mm deep triangular notch in the bottom edge, narrowing up to 28 mm with nearly straight sides that then curve in (`--hull-h`, `--hull-a`, `--hull-b`), then a straight 2 mm groove (`--groove-width`, `--groove-depth`) that narrows and fades out 3 mm below the rim. `--no-cuts` gives a plain glass |
-| Underside | Concave, cosine-bell profile 3 mm higher at the centre (`--punt-depth`), resting on a ring at the edge; a radial V-cut from each side notch narrowing to a point at a smooth Ø10 mm centre disc (`--centre-d`, `--no-bottom-cuts`) |
-| Mass | ~308 g, from the mesh volume × 2.45 g/cm³ crystal (`--mass-g` to use a weighed value) |
+| Underside | Concave, cosine-bell profile 3 mm higher at the centre (`--punt-depth`), resting on a ring at the edge; a radial V-cut from each side notch narrowing to a point at a smooth Ø10 mm centre disc; side and bottom cut form one groove wrapping smoothly around the bottom edge (`--centre-d`, `--no-bottom-cuts`) |
+| Mass | ~307 g, from the mesh volume × 2.45 g/cm³ crystal (`--mass-g` to use a weighed value) |
 | Capacity | ~297 ml brim-full |
 
 ```bash
 python asset_gen/make_tumbler.py -o source/sim_to_real_so101/assets/usd/Tumbler.usda --preview outputs/tumbler.png
 ```
 
-Riedel's product page lists the Neat as 77 mm high × 70 mm wide, so measure again before relying on the defaults (`--height`, `--diameter`). The render mesh is ~62k faces (6.4 MB); `--res-mm` (circumferential spacing, 4× finer around each groove) and `--dz` trade detail for size. The preview shows the section, the outside unrolled with the cut depth (the quickest way to judge the dent outline), the outside, and the underside seen from below. The collider ignores the cuts: a solid base disc plus 16 convex wall sectors following the inner taper.
+Riedel's product page lists the Neat as 77 mm high × 70 mm wide, so measure again before relying on the defaults (`--height`, `--diameter`). The render mesh is ~62k faces (6.5 MB); `--res-mm` (circumferential spacing, 4× finer around each groove) and `--dz` trade detail for size. The preview shows the section, the outside unrolled with the cut depth (the quickest way to judge the dent outline), the outside, and the underside seen from below. The collider ignores the cuts: a solid base disc plus 16 convex wall sectors following the inner taper.
 
 ## Iterating
 

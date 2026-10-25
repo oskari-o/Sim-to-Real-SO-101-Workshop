@@ -87,12 +87,13 @@ class TumblerParams:
 def profile(p: TumblerParams):
     """Closed (r, z, tag) profile: underside -> outside wall -> rim -> inside wall -> floor.
 
-    tag 'u' = underside (concave, radial cuts), 'o' = outside wall (side cuts), 'n' = untouched.
+    tag 'u' = underside (concave, radial cuts), 'f' = bottom edge fillet, 'o' = outside wall
+    (side cuts), 'n' = untouched.
     """
     R, H, fo, fi, rr = p.R, p.height, p.bottom_fillet, p.floor_fillet, p.wall_top / 2
     n_u = max(8, int(round((R - fo) / p.res_mm)))
     pts = [(r, punt_z(p, r), "u") for r in np.linspace(0, R - fo, n_u + 1)]
-    pts += [(R - fo + fo * math.sin(a), fo - fo * math.cos(a), "o") for a in np.linspace(0, math.pi / 2, 6)[1:]]
+    pts += [(R - fo + fo * math.sin(a), fo - fo * math.cos(a), "f") for a in np.linspace(0, math.pi / 2, 8)[1:-1]]
     top = H - rr - 1.0
     n = max(2, int(round((top - fo) / p.dz)))
     pts += [(R, z, "o") for z in np.linspace(fo, top, n + 1)[1:]]
@@ -118,30 +119,49 @@ def punt_z(p: TumblerParams, r: float) -> float:
 def bottom_cut(p: TumblerParams, theta: np.ndarray, r: float) -> np.ndarray:
     """Upward depth (mm) of the radial V-cuts on the underside at angles theta and radius r.
 
-    Each cut lines up with a side dent: as wide as the notch at the rim, narrowing linearly (with
-    its depth) to a point at the edge of the smooth centre disc. It eases out over the last few mm
-    before the rim, where the side notch takes over.
+    Each cut lines up with a side dent: at the bottom edge it is exactly the side notch (width and
+    depth), so the two form one groove wrapping around the edge; inward it narrows linearly (with
+    its depth) to a point at the edge of the smooth centre disc.
     """
     rc = 0.5 * p.centre_d
     if not (p.cuts and p.bottom_cuts) or r <= rc:
         return np.zeros_like(theta)
     edge = p.R - p.bottom_fillet
     pitch = 2 * math.pi / p.dents
-    t = (r - rc) / (p.R - rc)
+    t = min(1.0, (r - rc) / (edge - rc))
     hw = 0.5 * min(p.notch_width, pitch * p.R) * t
-    depth = p.notch_depth * t * float(np.clip((edge - r) / 3.0, 0, 1))
+    depth = p.notch_depth * t
     ds = np.abs(theta - np.round(theta / pitch) * pitch) * r
     return depth * np.clip(1 - ds / max(hw, 1e-6), 0, None)
 
 
-def underside(p: TumblerParams, theta: np.ndarray, r: float, z: float):
-    """Displaced underside point(s): the side notch pulls the outer few mm inward, the radial cut lifts it."""
-    edge_w = 5.0
-    w = float(np.clip((r - (p.R - p.bottom_fillet - edge_w)) / edge_w, 0, 1))
-    w = w * w * (3 - 2 * w)  # smoothstep
-    rr = r - cut_depth(p, theta, 0.0) * w
-    zz = z + bottom_cut(p, theta, r)
-    return rr, zz
+def displace(p: TumblerParams, theta: np.ndarray, r: float, z: float, tag: str):
+    """Cut the outside surface at one profile point for all angles theta -> (r', z') arrays.
+
+    The side dents (radial, on the wall) and the radial bottom cuts (upward, on the underside) are
+    one V-groove wrapping around the bottom edge: at the edge both are exactly the notch (depth d).
+    The wall is offset inward by d, the underside upward by d, and the edge fillet becomes the
+    fillet between those two offset faces, radius max(fo - d, 0.3 mm). Wall and underside points
+    within a few mm of the edge are re-spaced onto the shifted tangent points, so nothing folds.
+    """
+    fo, R = p.bottom_fillet, p.R
+    dc = cut_depth(p, theta, 0.0)                 # notch depth at the edge (0 between dents)
+    rho = np.maximum(fo - dc, 0.3)
+    cen_r, cen_z = R - dc - rho, dc + rho         # fillet centre between the offset faces
+    if tag == "f":
+        phi = math.atan2(z - fo, r - (R - fo))    # -90 deg (underside) .. 0 deg (wall)
+        return cen_r + rho * math.cos(phi), cen_z + rho * math.sin(phi)
+    if tag == "o":
+        rr = r - cut_depth(p, theta, z) * (r / R)
+        zw = fo + p.notch_depth + 1.5
+        zz = cen_z + (z - fo) * (zw - cen_z) / (zw - fo) if z < zw else np.full_like(theta, z)
+        return rr, zz
+    if tag == "u":
+        zz = z + bottom_cut(p, theta, r)
+        rw = R - fo - (p.notch_depth + 1.5)
+        rr = rw + (r - rw) * (cen_r - rw) / (R - fo - rw) if r > rw else np.full_like(theta, r)
+        return rr, zz
+    return np.full_like(theta, r), np.full_like(theta, z)
 
 
 def dent_shape(p: TumblerParams, z: float) -> tuple[float, float]:
@@ -205,11 +225,7 @@ def build_mesh(p: TumblerParams):
             rings.append([len(points)] * S)
             points.append((0.0, 0.0, z))
             continue
-        rr, zz = np.full(S, r), np.full(S, z)
-        if tag == "o":
-            rr = r - cut_depth(p, th, z) * (r / p.R)
-        elif tag == "u":
-            rr, zz = underside(p, th, r, z)
+        rr, zz = displace(p, th, r, z, tag)
         rings.append(list(range(len(points), len(points) + S)))
         points += list(zip(rr * c, rr * s, zz))
     counts, idx = [], []
@@ -386,13 +402,8 @@ def preview(p: TumblerParams, path: str):
     th = np.array([0.0])  # through the centre of a dent
     cut = []
     for r, z, tag in prof:
-        if tag == "o":
-            cut.append((r - cut_depth(p, th, z)[0] * r / p.R, z))
-        elif tag == "u":
-            ru, zu = underside(p, th, r, z)
-            cut.append((float(ru[0]), float(zu[0])))
-        else:
-            cut.append((r, z))
+        ru, zu = displace(p, th, r, z, tag)
+        cut.append((float(ru[0]), float(zu[0])))
     ax.plot([-c[0] for c in cut], [c[1] for c in cut], color="#1f5f8b", lw=0.8)
     ax.fill([-c[0] for c in cut], [c[1] for c in cut], color="#cfe3ef")
     pieces, interior = collider_pieces(p)
