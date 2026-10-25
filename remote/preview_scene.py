@@ -44,6 +44,11 @@ env = gym.make(args.task, cfg=env_cfg)
 env.reset()
 base = env.unwrapped
 print(f"[preview] loaded {args.task}; action space {env.action_space}")
+try:  # optional viewport setup from the VIEWPORTS env var (see utils/viewports.py)
+    from sim_to_real_so101.utils.viewports import setup_viewports
+    setup_viewports(env)
+except ImportError:
+    pass
 
 
 def hold_action():

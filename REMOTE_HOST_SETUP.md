@@ -11,7 +11,7 @@ Helper files in [`remote/`](remote/):
 | `run_teleop.sh` | server | Starts `teleop-docker` without X11, with all driver capabilities |
 | `preview_scene.py` | server, in container | Loads a course task with no arm connected, resets periodically |
 | `serial_bridge.py` | Mac | Exposes the leader arm's serial port over TCP |
-| `kit_env.sh` | server, in container | `source remote/kit_env.sh` sets `$KIT` (livestream flags) and `PYTHONUNBUFFERED` |
+| `kit_env.sh` | server, in container | `source remote/kit_env.sh` sets `$KIT` (livestream flags), `PYTHONUNBUFFERED` and `VIEWPORTS` (viewport cameras/resolution set at startup, see `utils/viewports.py`) |
 | `joint_teleop_app.py` | Mac | Joint-slider teleop UI in the browser, used with `lerobot_agent.py --teleop_device virtual` |
 | `leader_sender.py` | Mac | Reads the leader arm locally and streams joint positions to the sim (recommended over `serial_bridge.py`) |
 
@@ -322,6 +322,17 @@ ssh -N -R 54322:localhost:54322 upcloud_gpu
 The sender prints the six joint values about twice a second, and `simulator connected` once the agent is up. Type `r`, `s` or `c` + Enter in the sender terminal for reset world, start/stop recording and cancel episode. The sim limits each joint to 10 units per step (`--max-step`), which only matters right after connecting, if the leader is far from the sim's start pose. The slider app and the sender use the same port, so run one or the other.
 
 Newer LeRobot reports degrees by default; the sender forces the -100..100 range the sim expects. If a joint still moves the wrong way or with an offset, the calibration on the Mac is the place to look (`lerobot-calibrate`).
+
+### Viewport setup
+
+Window > Layout > Save Layout only stores where windows are docked; the camera each viewport shows and its resolution are lost when the stage is rebuilt on the next run. Instead, both `preview_scene.py` and `lerobot_agent.py` apply the `VIEWPORTS` environment variable after the scene loads. Entries are comma-separated, one per viewport: the first sets the main viewport, the rest open as new viewports docked to its right. Each entry is a camera (`ego`, `external_D455`, `persp`, or a prim path), optionally with a render resolution that also sets the aspect ratio:
+
+```bash
+VIEWPORTS="persp,ego@640x480"                        # free camera + wrist camera
+VIEWPORTS="external_D455@640x480,ego@640x480"        # what the policy sees (kit_env.sh default)
+```
+
+Problems are printed as `[viewports] ...` and never stop the run.
 
 ## 11. Logs and housekeeping
 

@@ -108,6 +108,7 @@ from sim_to_real_so101.utils.keyboard import KeyboardControl
 from sim_to_real_so101.utils.lerobot_interface import LeRobotSO101Interface
 from sim_to_real_so101.utils.lerobot_recorder import LeRobotRecorder
 from sim_to_real_so101.utils.virtual_leader import VirtualLeader
+from sim_to_real_so101.utils.viewports import setup_viewports
 
 
 def main():
@@ -133,6 +134,7 @@ def main():
 
     # reset environment
     obs, _ = env.reset()
+    setup_viewports(env)  # optional, from the VIEWPORTS env var
 
     # cameras
     cameras = {}

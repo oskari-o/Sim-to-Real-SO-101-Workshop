@@ -10,4 +10,7 @@ SERVER_IP="${SERVER_IP:-94.237.11.153}"
 export SERVER_IP
 export KIT="--/exts/omni.kit.livestream.app/primaryStream/publicIp=${SERVER_IP} --/exts/omni.kit.livestream.app/primaryStream/signalPort=49100 --/exts/omni.kit.livestream.app/primaryStream/streamPort=47998"
 export PYTHONUNBUFFERED=1
-echo "KIT set for ${SERVER_IP} (signal 49100/tcp, stream 47998/udp)"
+# Viewport layout applied at startup (utils/viewports.py): main viewport + a docked second one.
+# Entries: scene camera (ego, external_D455), persp/top/front/right, or a prim path; optional @WxH.
+export VIEWPORTS="${VIEWPORTS:-external_D455@640x480,ego@640x480}"
+echo "KIT set for ${SERVER_IP} (signal 49100/tcp, stream 47998/udp); VIEWPORTS=${VIEWPORTS}"
